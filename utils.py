@@ -37,8 +37,8 @@ def evaluate(model, criterion, data_loader, device):
             output = model(x)  # forward pass
             # y_matched = match_mask(output, y) # AJUSTE PARA MASCARA
             # output = match_output_dim(output, y)
-            y = match_target_to_output(output, y) 
-            total_loss += criterion(output, y).item()  # acumulamos la perdida
+            output = F.interpolate(output, size=y.shape[-2:], mode='bilinear', align_corners=False)            
+            total_loss += criterion(output, y.float()).item()  # acumulamos la perdida
     return total_loss / len(data_loader)  # retornamos la perdida promedio
 
 
@@ -214,7 +214,7 @@ def train(
                 early_stopping(val_loss)  # llamamos al early stopping
 
             if log_fn is not None:  # si se pasa una funcion de log
-                if (epoch + 1) % log_every == 0:  # loggeamos cada log_every epocas
+                if epoch == 1 or ((epoch + 1) % log_every == 0):  # loggeamos cada log_every epocas
                     log_fn(epoch, train_loss, val_loss)  # llamamos a la funcion de log
 
             if do_early_stopping and early_stopping.early_stop:
@@ -587,28 +587,18 @@ def predict_and_build_submission(
     with torch.no_grad():
         for x, name in data_loader:
             x = x.to(device)
-            logits = model(x)  # puede ser (1,1,H,W) o (1,C,H,W)
-            print(logits.shape)
-            logits = match_output_to_dim(logits)
-            print(f"logits: {logits.shape}")
-            # detectamos si es binario o multiclase
-            if logits.shape[1] == 1:
-                # --- caso binario ---
-                probs = torch.sigmoid(logits)          # (1,1,H,W)
-                mask = (probs > threshold).float()
-            else:
-                # --- caso multiclass ---
-                probs = torch.softmax(logits, dim=1)   # (1,C,H,W)
-                fg_prob = probs[:, target_class, ...]  # (1,H,W)
-                mask = (fg_prob > threshold).float().unsqueeze(1)
 
-            # print(f"mask shape: {mask.shape}")
-            # print(MASK[:50, :50])
-            # print(mask[:10, :10])
-            
-            mask_np = mask.squeeze().cpu().numpy().astype(np.uint8)  # (H,W)
-            print(f"mask_np shape: {mask_np.shape}")
-            print(mask_np[:2, :20])
+            logits = model(x)   # (1,1,256,256)
+
+            # Resize a 800×800 (lo que Kaggle espera)
+            logits_big = F.interpolate(
+                logits, size=(800, 800), mode="bilinear", align_corners=False
+            )
+
+            probs = torch.sigmoid(logits_big)
+            mask = (probs > threshold).float()
+
+            mask_np = mask.squeeze().cpu().numpy().astype(np.uint8)
             rle = rle_encode(mask_np)
 
             image_ids.append(name[0])
