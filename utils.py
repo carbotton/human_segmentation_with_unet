@@ -38,7 +38,19 @@ def evaluate(model, criterion, data_loader, device):
             # y_matched = match_mask(output, y) # AJUSTE PARA MASCARA
             # output = match_output_dim(output, y)
             output = F.interpolate(output, size=y.shape[-2:], mode='bilinear', align_corners=False)            
-            total_loss += criterion(output, y.float()).item()  # acumulamos la perdida
+            #total_loss += criterion(output, y.float().unsqueeze(1)).item()  # acumulamos la perdida
+            target = y.float()
+            
+            # 1. Eliminar dimensiones extra de tamaño 1
+            if target.ndim > 4:
+                target = target.squeeze()
+                
+            # 2. Asegurar la dimensión del canal
+            if target.ndim == 3:
+                target = target.unsqueeze(1)
+                
+            total_loss += criterion(output, target).item()  # acumulamos la perdida
+
     return total_loss / len(data_loader)  # retornamos la perdida promedio
 
 
@@ -194,8 +206,18 @@ def train(
                 logits = model(x)                         # [N,1,H,W] logits
                 logits = F.interpolate(logits, size=y.shape[-2:], mode='bilinear', align_corners=False)
 
+                #batch_loss = criterion(logits, y.float().unsqueeze(1))target = y.float()
+                target = y.float()
+                # 1. Eliminar dimensiones extra de tamaño 1 (ej: [N, 1, 1, H, W] -> [N, H, W])
+                if target.ndim > 4:
+                    target = target.squeeze()
+                    
+                # 2. Asegurar la dimensión del canal (ej: [N, H, W] -> [N, 1, H, W])
+                if target.ndim == 3:
+                    target = target.unsqueeze(1)
+                
+                batch_loss = criterion(logits, target)
                 #batch_loss = criterion(logits, y.float().unsqueeze(1))
-                batch_loss = criterion(logits, y.float())
 
                 batch_loss.backward()  # backpropagation
                 optimizer.step()  # actualizamos los pesos
