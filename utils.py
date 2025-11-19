@@ -6,6 +6,8 @@ import wandb, json
 import numpy as np
 import seaborn as sns
 import pandas as pd
+import math
+import cv2
 
 from sklearn.metrics import (
     accuracy_score,
@@ -609,7 +611,8 @@ def predict_and_build_submission(
     threshold=0.5,
     target_class=1,   # usado solo si el modelo es multiclass
     use_post_proc=False,
-    min_size=50
+    min_size=50,
+    debug=False
 ):
     """
     Genera un submission.csv (con timestamp) a partir de un modelo de segmentación
@@ -631,6 +634,10 @@ def predict_and_build_submission(
 
     image_ids = []
     encoded_pixels = []
+    
+    debug_pre_masks = []
+    debug_post_masks = []
+    debug_names = []
 
     with torch.no_grad():
         for x, name in data_loader:
@@ -639,6 +646,7 @@ def predict_and_build_submission(
             logits = model(x)   # (1,1,256,256)
 
             # Resize a 800×800 (lo que Kaggle espera)
+            H_orig, W_orig = logits.shape[-2], logits.shape[-1]
             logits_big = F.interpolate(
                 logits, size=(800, 800), mode="bilinear", align_corners=False
             )
@@ -646,9 +654,28 @@ def predict_and_build_submission(
             probs = torch.sigmoid(logits_big)
             mask = (probs > threshold).float()
 
+            # Escalar min_size a la nueva resolución
+            if use_post_proc:
+                scale_area = (800 * 800) / (H_orig * W_orig)
+                min_size_scaled = int(min_size * scale_area)
+            else:
+                min_size_scaled = min_size            
+
+            # Guardar "pre" para debug
+            if debug and use_post_proc:
+                # asumimos batch_size=1; si no, iterar sobre dim 0
+                pre_np = mask.squeeze().cpu().numpy().astype(np.uint8)
+                debug_pre_masks.append(pre_np)
+                debug_names.append(name[0])
+                
             # ---------- POST-PROCESADO OPCIONAL ----------
             if use_post_proc:
                 mask = postprocess_batch(mask, min_size=min_size).to(device)          
+
+            # Guardar "post" para debug
+            if debug and use_post_proc:
+                post_np = mask.squeeze().cpu().numpy().astype(np.uint8)
+                debug_post_masks.append(post_np)               
 
             mask_np = mask.squeeze().cpu().numpy().astype(np.uint8)
             rle = rle_encode(mask_np)
@@ -656,6 +683,38 @@ def predict_and_build_submission(
             image_ids.append(name[0])
             encoded_pixels.append(rle)
 
+    # ==========================
+    # PLOTEO EN GRILLA (debug)
+    # ==========================
+    if debug and use_post_proc and len(debug_pre_masks) > 0:
+        n_imgs = len(debug_pre_masks)
+        total_slots = 2 * n_imgs  # pre y post
+        cols = 6
+        rows = math.ceil(total_slots / cols)
+
+        plt.figure(figsize=(cols * 2, rows * 2))  # imágenes más chicas
+
+        for i in range(n_imgs):
+            # Índices de subplot (0-based) para pre y post
+            pre_idx = 2 * i
+            post_idx = 2 * i + 1
+
+            # PRE
+            ax_pre = plt.subplot(rows, cols, pre_idx + 1)
+            ax_pre.imshow(debug_pre_masks[i], cmap="gray")
+            ax_pre.set_title(f"{debug_names[i]} - pre", fontsize=8)
+            ax_pre.axis("off")
+
+            # POST
+            ax_post = plt.subplot(rows, cols, post_idx + 1)
+            ax_post.imshow(debug_post_masks[i], cmap="gray")
+            ax_post.set_title(f"{debug_names[i]} - post", fontsize=8)
+            ax_post.axis("off")
+
+        plt.tight_layout()
+        plt.show()            
+
+    ####### SUBMISSION
     df = pd.DataFrame({"id": image_ids, "encoded_pixels": encoded_pixels})
 
     # nombre con datetime
@@ -776,7 +835,7 @@ def postprocess_batch(preds: torch.Tensor, min_size: int = 50) -> torch.Tensor:
     clean_preds = []
     for i in range(preds_np.shape[0]):
         mask_i = preds_np[i, 0]                  # (H,W)
-        mask_clean = clean_mask(mask_i, min_size=min_size)
+        mask_clean = clean_mask_v2(mask_i, min_size=min_size)
         clean_preds.append(mask_clean[None, ...])  # (1,H,W)
 
     clean_preds = np.stack(clean_preds, axis=0).astype(np.float32)  # (B,1,H,W)
@@ -801,6 +860,35 @@ def clean_mask(mask_np, min_size=50):
             m[labeled == comp] = False
 
     return m.astype(np.uint8)
-    
+
+def clean_mask_v2(mask, min_size=5000):
+    """
+    mask: numpy array binaria 0/1
+    """
+    # Convert to uint8
+    m = mask.astype(np.uint8)
+
+    # ===== 1) Morphological CLOSE (fill small gaps/holes in border)
+    kernel_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,(15,15))
+    m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, kernel_close)
+
+    # ===== 2) Morphological OPEN (remove spurious noise)
+    kernel_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,(7,7))
+    m = cv2.morphologyEx(m, cv2.MORPH_OPEN, kernel_open)
+
+    # ===== 3) Keep LARGEST connected component
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(m)
+    if num_labels > 1:
+        largest_idx = 1 + np.argmax(stats[1:, cv2.CC_STAT_AREA])
+        m = (labels == largest_idx).astype(np.uint8)
+
+    # ===== 4) Fill small holes
+    #m = remove_small_holes(m.astype(bool), area_threshold=4000).astype(np.uint8)
+
+    # ===== 5) Optional final erosion (smooth boundary if too large)
+    kernel_erode = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,(3,3))
+    m = cv2.erode(m, kernel_erode)
+
+    return m    
 
     
