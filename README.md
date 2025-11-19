@@ -7,6 +7,24 @@
  - [ ] (!!) Arreglar funcion de submission para que funcione bien para batch_size > 1. Actualmente hay que correr el dataloader de kaggle con batch_size=1 antes de llamar a la funcion de la submission para que retorne bien la cantidad de filas.
  - [ ] Investigar efecto de preprocesado de imagenes, mas alla del data augmentation
  
+# RESULTADOS
+
+| Experimento (aprox)                                            | Celda | Modelo            | Dice (test) |
+| -------------------------------------------------------------- | ----- | ----------------- | ----------- |
+| UNet original, B/N, padding 0                                  | 75    | `model_1_2`       | **0.12**    |
+| UNet, padding=1, B/N                                           | 80    | `unet_pad_1`      | **0.80**    |
+| UNet, padding=1, B/N                                           | 80    | `unet_pad_1`      | **????**    |
+| UNet, padding=1, RGB                                           | 87    | `unet_rgb`        | **0.79**    |
+| UNet, RGB, BN + Dropout (config “mala”)                        | 94    | `unet_rgb_2`      | **0.17**    |
+| UNet, RGB, solo Dropout                                        | 100   | `unet_rgb_drop`   | **0.80**    |
+| UNet, RGB, Dropout + data aug (versión 3)                      | 107   | `unet_rgb_3`      | **0.74**    |
+| UNet, B/N, Dice + BCE                                          | 117   | `unet_dice`       | **0.68**    |
+| UNet, RGB, Dice + BCE                                          | 121   | `unet_rgb_dice`   | **0.81**    |
+| UNet, RGB, Dice + BCE + “nuevas transforms”                    | 129   | `unet_rgb_dice_2` | **0.71**    |
+| UNetAttention, RGB, Dropout + DA, Dice + BCE                   | 136   | `unet_att`        | **0.82**    |
+| UNetAttention re-entrenado (loss ponderada + LR un poco mayor) | 150   | `unet_att_2`      | **0.81**    |
+
+
 # INFO
 
 ### Guardar pesos del modelo
