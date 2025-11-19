@@ -23,8 +23,8 @@
 | UNet, padding=1, B/N                                           | 80    | `unet_pad_1`      | **0.84**    |
 | UNet, padding=1, RGB                                           | 87    | `unet_rgb`        | **0.83**    |
 | UNet, RGB, BN + Dropout                                        | 94    | `unet_rgb_2`      | **0.89**    |
-| UNet, RGB, solo Dropout                                        | 100   | `unet_rgb_drop`   | **0.80**    |
-| UNet, RGB, Dropout + data aug (versión 3)                      | 107   | `unet_rgb_3`      | **0.74**    |
+| UNet, RGB, solo Dropout                                        | 100   | `unet_rgb_drop`   | **0.82**    |
+| UNet, RGB, BN + Dropout + data aug                             | 107   | `unet_rgb_3`      | **0.74**    |
 | UNet, B/N, Dice + BCE                                          | 117   | `unet_dice`       | **0.68**    |
 | UNet, RGB, Dice + BCE                                          | 121   | `unet_rgb_dice`   | **0.81**    |
 | UNet, RGB, Dice + BCE + “nuevas transforms”                    | 129   | `unet_rgb_dice_2` | **0.71**    |
