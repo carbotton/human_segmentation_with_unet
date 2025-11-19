@@ -30,6 +30,7 @@
 | UNet, RGB, Dice + BCE + “nuevas transforms”                    | 129   | `unet_rgb_dice_2` | **0.71**    |
 | UNetAttention, RGB, Dropout + DA, Dice + BCE                   | 136   | `unet_att`        | **0.82**    |
 | UNetAttention re-entrenado (loss ponderada + LR un poco mayor) | 150   | `unet_att_2`      | **0.81**    |
+| UNetAttention, RGB, BN, Dropout, SIN data aug                  | 150   | `unet_att_3`      | **0.88**    |
 
 
 # INFO
