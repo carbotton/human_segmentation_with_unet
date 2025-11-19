@@ -13,7 +13,7 @@
 | -------------------------------------------------------------- | ----- | ----------------- | ----------- |
 | UNet original, B/N, padding 0                                  | 75    | `model_1_2`       | **0.12**    |
 | UNet, padding=1, B/N                                           | 80    | `unet_pad_1`      | **0.80**    |
-| UNet, padding=1, B/N                                           | 80    | `unet_pad_1`      | **????**    |
+| UNet, padding=1, B/N                                           | 80    | `unet_pad_1`      | **0.84**    |
 | UNet, padding=1, RGB                                           | 87    | `unet_rgb`        | **0.79**    |
 | UNet, RGB, BN + Dropout (config “mala”)                        | 94    | `unet_rgb_2`      | **0.17**    |
 | UNet, RGB, solo Dropout                                        | 100   | `unet_rgb_drop`   | **0.80**    |
