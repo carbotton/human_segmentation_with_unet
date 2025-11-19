@@ -13,6 +13,8 @@ from sklearn.metrics import (
 )
 from datetime import datetime
 
+from scipy.ndimage import binary_opening, binary_closing, label
+
 TARGET_NAMES = ["background", "foreground"]
 
 def evaluate(model, criterion, data_loader, device):
@@ -599,8 +601,6 @@ def rle_encode(mask):
     return ' '.join(str(x) for x in runs)
 
 
-
-
 def predict_and_build_submission(
     model,
     device,
@@ -608,6 +608,8 @@ def predict_and_build_submission(
     out_csv="submission",
     threshold=0.5,
     target_class=1,   # usado solo si el modelo es multiclass
+    use_post_proc=False,
+    min_size=50
 ):
     """
     Genera un submission.csv (con timestamp) a partir de un modelo de segmentación
@@ -644,6 +646,10 @@ def predict_and_build_submission(
             probs = torch.sigmoid(logits_big)
             mask = (probs > threshold).float()
 
+            # ---------- POST-PROCESADO OPCIONAL ----------
+            if use_post_proc:
+                mask = postprocess_batch(mask, min_size=min_size).to(device)          
+
             mask_np = mask.squeeze().cpu().numpy().astype(np.uint8)
             rle = rle_encode(mask_np)
 
@@ -660,7 +666,6 @@ def predict_and_build_submission(
 
     return df, csv_name
 
-import torch
 
 def restaurar_modelo(
     model,
@@ -757,3 +762,45 @@ def continuar_entrenamiento(
     )
 
     return epoch_train_errors, epoch_val_errors, checkpoint
+
+def postprocess_batch(preds: torch.Tensor, min_size: int = 50) -> torch.Tensor:
+    """
+    preds: tensor (B,1,H,W) binario (0/1)
+    return: tensor (B,1,H,W) postprocesado
+    """
+    if not isinstance(preds, torch.Tensor):
+        raise TypeError(f"postprocess_batch esperaba torch.Tensor, recibió {type(preds)}")
+
+    preds_np = preds.detach().cpu().numpy()  # (B,1,H,W)
+
+    clean_preds = []
+    for i in range(preds_np.shape[0]):
+        mask_i = preds_np[i, 0]                  # (H,W)
+        mask_clean = clean_mask(mask_i, min_size=min_size)
+        clean_preds.append(mask_clean[None, ...])  # (1,H,W)
+
+    clean_preds = np.stack(clean_preds, axis=0).astype(np.float32)  # (B,1,H,W)
+    clean_preds = torch.from_numpy(clean_preds)                     # tensor (B,1,H,W)
+    return clean_preds
+
+def clean_mask(mask_np, min_size=50):
+    """
+    mask_np: array (H, W) binario {0,1}
+    min_size: tamaño mínimo de componente para mantener
+    """
+    m = mask_np.astype(bool)
+
+    # Opening/closing morfológico
+    m = binary_opening(m, structure=np.ones((3, 3)))
+    m = binary_closing(m, structure=np.ones((3, 3)))
+
+    # Eliminar componentes muy pequeñas
+    labeled, num = label(m)
+    for comp in range(1, num + 1):
+        if np.sum(labeled == comp) < min_size:
+            m[labeled == comp] = False
+
+    return m.astype(np.uint8)
+    
+
+    
