@@ -1,7 +1,7 @@
 # PENDIENTES
  - [x] Guardar pesos del modelo durante entrenamiento
  - [ ] Agregar jitter en transforms y ver si mejora
- - [ ] Post procesado de mascaras por si quedan con ruido o hueco
+ - [ ] **Post** procesado de mascaras por si quedan con ruido o hueco
  - [x] Nuevo umbral sigmoid
  - [ ] Probar learning rate scheduler
  - [ ] (!!) Arreglar funcion de submission para que funcione bien para batch_size > 1. Actualmente hay que correr el dataloader de kaggle con batch_size=1 antes de llamar a la funcion de la submission para que retorne bien la cantidad de filas.
@@ -9,7 +9,29 @@
  - [ ] FOCAL TVERSKY LOSS
  - [ ] Fine tunning
  - [ ] Scheduler learning rate
+ - [ ] Investigar efecto de **pre**procesado de imagenes, mas alla del data augmentation
+ - [ ] Tratar el problema como si tuviera clases desbalanceadas -- hay mas fondo que persona
+ - [ ] Probar que sobre el final use la Focal Loss
  
+ 
+# RESULTADOS
+
+| Experimento (aprox)                                            | Celda | Modelo            | Dice (test) |
+| -------------------------------------------------------------- | ----- | ----------------- | ----------- |
+| UNet original, B/N, padding 0                                  | 75    | `model_1_2`       | **0.12**    |
+| UNet, padding=1, B/N                                           | 80    | `unet_pad_1`      | **0.80**    |
+| UNet, padding=1, B/N                                           | 80    | `unet_pad_1`      | **0.84**    |
+| UNet, padding=1, RGB                                           | 87    | `unet_rgb`        | **0.83**    |
+| UNet, RGB, BN + Dropout                                        | 94    | `unet_rgb_2`      | **0.89**    |
+| UNet, RGB, solo Dropout                                        | 100   | `unet_rgb_drop`   | **0.80**    |
+| UNet, RGB, Dropout + data aug (versión 3)                      | 107   | `unet_rgb_3`      | **0.74**    |
+| UNet, B/N, Dice + BCE                                          | 117   | `unet_dice`       | **0.68**    |
+| UNet, RGB, Dice + BCE                                          | 121   | `unet_rgb_dice`   | **0.81**    |
+| UNet, RGB, Dice + BCE + “nuevas transforms”                    | 129   | `unet_rgb_dice_2` | **0.71**    |
+| UNetAttention, RGB, Dropout + DA, Dice + BCE                   | 136   | `unet_att`        | **0.82**    |
+| UNetAttention re-entrenado (loss ponderada + LR un poco mayor) | 150   | `unet_att_2`      | **0.81**    |
+
+
 # INFO
 
 ### Guardar pesos del modelo
