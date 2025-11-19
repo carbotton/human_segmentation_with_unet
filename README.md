@@ -6,6 +6,9 @@
  - [ ] Probar learning rate scheduler
  - [ ] (!!) Arreglar funcion de submission para que funcione bien para batch_size > 1. Actualmente hay que correr el dataloader de kaggle con batch_size=1 antes de llamar a la funcion de la submission para que retorne bien la cantidad de filas.
  - [ ] Investigar efecto de preprocesado de imagenes, mas alla del data augmentation
+ - [ ] FOCAL TVERSKY LOSS
+ - [ ] Fine tunning
+ - [ ] Scheduler learning rate
  
 # INFO
 
@@ -51,6 +54,18 @@ def center_crop: lo usa UNet
 def model_segmentation_report: 
 evalua el modelo + calcula y muestra metricas. Hay que tener cuidado con los tamaños, porque si no tenemos padding, la red devuelve imagenes mas chicas que la mascara y para poder compararlas tienen que coincidir.
 
+### Fine-tuning con una loss “más suave”, Estrategia práctica:
+
+* Entrenar como ahora (BCE+Dice).
+* Guardar el mejor checkpoint.
+* Cargarlo y entrenar solo 10–20 épocas más con Focal Tversky o con Dice puro, con LR más chico (ej. 1e-4 o 3e-5).
+
+### Scheduler
+optimizer = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-5)
+scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+    optimizer, mode="max", factor=0.5, patience=3, verbose=True
+)
+
 ### Links
 
 UNet con arquitectura modificada:
@@ -62,3 +77,9 @@ UNet + attention:
 
 UNet for human segmentation, con arquitectura original: 
 * https://towardsdev.com/human-segmentation-using-u-net-with-source-code-easiest-way-f78be6e238f9
+
+FOCAL TVERSKY LOSS
+* https://arxiv.org/pdf/1810.07842, usar esta loss en los ultimos 10/20 epoch 
+* https://www.igi-global.com/pdf.aspx?tid=315756&ptid=310168&ctid=4&oa=true&isxn=9781668479315
+
+
