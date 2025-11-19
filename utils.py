@@ -165,6 +165,9 @@ def train(
     epochs=10,
     log_fn=print_log,
     log_every=1,
+    checkpoint_path=None,
+    save_optimizer=True,
+    loss_ponderada=True
 ):
     """
     Entrena el modelo utilizando el optimizador y la función de pérdida proporcionados.
@@ -180,6 +183,8 @@ def train(
         epochs (int): Número de épocas de entrenamiento (default: 10).
         log_fn (function): Función que se llamará después de cada log_every épocas con los argumentos (epoch, train_loss, val_loss) (default: None).
         log_every (int): Número de épocas entre cada llamada a log_fn (default: 1).
+        checkpoint_path: path al archivo donde se guardará el mejor modelo
+        save_optmizer: si es true guarda el estado del optimizer en un diccionario
 
     Returns:
         Tuple[List[float], List[float]]: Una tupla con dos listas, la primera con el error de entrenamiento de cada época y la segunda con el error de validación de cada época.
@@ -192,7 +197,8 @@ def train(
             early_stopping = EarlyStopping(
                 patience=patience
             )  # instanciamos el early stopping
-
+        best_val_loss = float("inf")  # para trackear el mejor modelo
+        
         for epoch in range(epochs):  # loop de entrenamiento
             model.train()  # ponemos el modelo en modo de entrenamiento
             train_loss = 0  # acumulador de la perdida de entrenamiento
@@ -215,8 +221,11 @@ def train(
                 # 2. Asegurar la dimensión del canal (ej: [N, H, W] -> [N, 1, H, W])
                 if target.ndim == 3:
                     target = target.unsqueeze(1)
-                
-                batch_loss = criterion(logits, target)
+
+                if loss_ponderada:
+                    batch_loss = criterion(logits, target, ponderada=True)
+                else:
+                    batch_loss = criterion(logits, target)
                 #batch_loss = criterion(logits, y.float().unsqueeze(1))
 
                 batch_loss.backward()  # backpropagation
@@ -231,7 +240,22 @@ def train(
                 model, criterion, val_loader, device
             )  # evaluamos el modelo en el conjunto de validacion
             epoch_val_errors.append(val_loss)  # guardamos la perdida de validacion
+            
+            # Guardar mejor modelo
+            if checkpoint_path is not None and val_loss < best_val_loss:
+                best_val_loss = val_loss
+                checkpoint = {
+                    "epoch": epoch,
+                    "model_state_dict": model.state_dict(),
+                    "val_loss": val_loss,
+                    "train_loss": train_loss,
+                }
+                if save_optimizer:
+                    checkpoint["optimizer_state_dict"] = optimizer.state_dict()
 
+                torch.save(checkpoint, checkpoint_path)
+                
+                
             if do_early_stopping:
                 early_stopping(val_loss)  # llamamos al early stopping
 
@@ -635,3 +659,101 @@ def predict_and_build_submission(
     print(f"submission guardado como: {csv_name}")
 
     return df, csv_name
+
+import torch
+
+def restaurar_modelo(
+    model,
+    optimizer=None,
+    checkpoint_path="best_model.pt",
+    device="cpu",
+):
+    """
+    Carga un modelo (y opcionalmente un optimizador) desde un checkpoint.
+
+    Args:
+        model (torch.nn.Module): Instancia del modelo con la misma arquitectura.
+        optimizer (torch.optim.Optimizer, opcional): Optimizer a restaurar.
+        checkpoint_path (str): Ruta del archivo .pt guardado.
+        device (str): Dispositivo donde cargar el modelo.
+
+    Returns:
+        model, optimizer, checkpoint: el modelo y optimizador actualizados, y el dict del checkpoint.
+    """
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+
+    # Restaurar pesos del modelo
+    model.load_state_dict(checkpoint["model_state_dict"])
+    model.to(device)
+
+    # Restaurar optimizer si corresponde
+    if optimizer is not None and "optimizer_state_dict" in checkpoint:
+        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+
+    return model, optimizer, checkpoint
+
+
+def continuar_entrenamiento(
+    model,
+    optimizer,
+    criterion,
+    train_loader,
+    val_loader,
+    device,
+    checkpoint_path="best_model.pt",
+    do_early_stopping=True,
+    patience=5,
+    epochs_adicionales=5,
+    log_fn=print_log,
+    log_every=1,
+):
+    """
+    Restaura el modelo y el optimizer desde un checkpoint y continúa el entrenamiento.
+
+    Args:
+        model (torch.nn.Module): Instancia del modelo con la misma arquitectura que el checkpoint.
+        optimizer (torch.optim.Optimizer): Optimizer a usar (se sobrescribe con el estado del checkpoint).
+        criterion, train_loader, val_loader, device: igual que en train.
+        checkpoint_path (str): Ruta del checkpoint a cargar.
+        do_early_stopping, patience, epochs_adicionales, log_fn, log_every:
+            mismos roles que en `train`, pero para las épocas adicionales.
+
+    Returns:
+        (epoch_train_errors, epoch_val_errors, checkpoint_inicial):
+            listas de pérdidas de este tramo de entrenamiento
+            y el checkpoint desde el que se reanudó.
+    """
+    # 1) Restaurar estado previo
+    model, optimizer, checkpoint = restaurar_modelo(
+        model,
+        optimizer=optimizer,
+        checkpoint_path=checkpoint_path,
+        device=device,
+    )
+
+    start_epoch = checkpoint.get("epoch", -1) + 1
+    best_val_loss_prev = checkpoint.get("val_loss", None)
+    print(
+        f"Reanudando desde epoch {start_epoch} "
+        f"(checkpoint guardado en epoch {checkpoint.get('epoch', 'desconocida')}, "
+        f"val_loss={best_val_loss_prev:.5f} )"
+    )
+
+    # 2) Continuar entrenamiento por `epochs_adicionales`
+    epoch_train_errors, epoch_val_errors = train(
+        model,
+        optimizer,
+        criterion,
+        train_loader,
+        val_loader,
+        device,
+        do_early_stopping=do_early_stopping,
+        patience=patience,
+        epochs=epochs_adicionales,        # solo las épocas nuevas
+        log_fn=log_fn,
+        log_every=log_every,
+        checkpoint_path=checkpoint_path,  # se sigue actualizando el mismo archivo
+        save_optimizer=True,
+    )
+
+    return epoch_train_errors, epoch_val_errors, checkpoint
