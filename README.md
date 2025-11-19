@@ -1,11 +1,14 @@
 # PENDIENTES
  - [x] Guardar pesos del modelo durante entrenamiento
  - [ ] Agregar jitter en transforms y ver si mejora
- - [ ] Post procesado de mascaras por si quedan con ruido o hueco
+ - [ ] **Post** procesado de mascaras por si quedan con ruido o hueco
  - [x] Nuevo umbral sigmoid
  - [ ] Probar learning rate scheduler
  - [ ] (!!) Arreglar funcion de submission para que funcione bien para batch_size > 1. Actualmente hay que correr el dataloader de kaggle con batch_size=1 antes de llamar a la funcion de la submission para que retorne bien la cantidad de filas.
- - [ ] Investigar efecto de preprocesado de imagenes, mas alla del data augmentation
+ - [ ] Investigar efecto de **pre**procesado de imagenes, mas alla del data augmentation
+ - [ ] Tratar el problema como si tuviera clases desbalanceadas -- hay mas fondo que persona
+ - [ ] Probar que sobre el final use la Focal Loss
+ 
  
 # RESULTADOS
 
@@ -14,8 +17,8 @@
 | UNet original, B/N, padding 0                                  | 75    | `model_1_2`       | **0.12**    |
 | UNet, padding=1, B/N                                           | 80    | `unet_pad_1`      | **0.80**    |
 | UNet, padding=1, B/N                                           | 80    | `unet_pad_1`      | **0.84**    |
-| UNet, padding=1, RGB                                           | 87    | `unet_rgb`        | **0.79**    |
-| UNet, RGB, BN + Dropout (config “mala”)                        | 94    | `unet_rgb_2`      | **0.17**    |
+| UNet, padding=1, RGB                                           | 87    | `unet_rgb`        | **0.83**    |
+| UNet, RGB, BN + Dropout                                        | 94    | `unet_rgb_2`      | **0.89**    |
 | UNet, RGB, solo Dropout                                        | 100   | `unet_rgb_drop`   | **0.80**    |
 | UNet, RGB, Dropout + data aug (versión 3)                      | 107   | `unet_rgb_3`      | **0.74**    |
 | UNet, B/N, Dice + BCE                                          | 117   | `unet_dice`       | **0.68**    |
