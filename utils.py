@@ -82,9 +82,9 @@ class EarlyStopping:
             self.counter = 0
 
 
-def print_log(epoch, train_loss, val_loss):
+def print_log(epoch, train_loss, val_loss, current_lr=None):
     print(
-        f"Epoch: {epoch + 1:03d} | Train Loss: {train_loss:.5f} | Val Loss: {val_loss:.5f}"
+        f"Epoch: {epoch + 1:03d} | Train Loss: {train_loss:.5f} | Val Loss: {val_loss:.5f} | Current LR: {current_lr:.5f}"
     )
 
 def match_mask(logits, y):
@@ -164,6 +164,7 @@ def train(
     train_loader,
     val_loader,
     device,
+    scheduler=None,
     do_early_stopping=True,
     patience=5,
     epochs=10,
@@ -260,12 +261,17 @@ def train(
                 torch.save(checkpoint, checkpoint_path)
                 
                 
+            if scheduler is not None:
+                # si lo configurás para minimizar la loss
+                scheduler.step(val_loss)
+
             if do_early_stopping:
                 early_stopping(val_loss)  # llamamos al early stopping
 
             if log_fn is not None:  # si se pasa una funcion de log
                 if epoch == 1 or ((epoch + 1) % log_every == 0):  # loggeamos cada log_every epocas
-                    log_fn(epoch, train_loss, val_loss)  # llamamos a la funcion de log
+                    current_lr = optimizer.param_groups[0]["lr"]
+                    log_fn(epoch, train_loss, val_loss, current_lr)  # llamamos a la funcion de log
 
             if do_early_stopping and early_stopping.early_stop:
                 print(
