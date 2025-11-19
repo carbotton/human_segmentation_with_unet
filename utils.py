@@ -891,4 +891,50 @@ def clean_mask_v2(mask, min_size=5000):
 
     return m    
 
+def dice_on_val_with_postproc(model, val_loader, device, threshold=0.5, min_size=50):
+    model.eval()
+    inter = 0.0
+    union = 0.0
+
+    with torch.no_grad():
+        for x, y in val_loader:
+            x = x.to(device)
+            y = y.to(device).float()
+            if y.ndim == 3:
+                y = y.unsqueeze(1)
+
+            logits = model(x)
+            if logits.shape[-2:] != y.shape[-2:]:
+                logits = F.interpolate(
+                    logits,
+                    size=y.shape[-2:],
+                    mode="bilinear",
+                    align_corners=False,
+                )
+
+            probs = torch.sigmoid(logits)
+            preds = (probs > threshold).float()
+
+            # convertir a numpy para postproceso por imagen
+            preds_np = preds.cpu().numpy()
+            y_np = y.cpu().numpy()
+
+            # aplicar postproceso por batch
+            clean_preds = []
+            for i in range(preds_np.shape[0]):
+                mask_i = preds_np[i, 0]  # (H,W)
+                mask_clean = clean_mask_v2(mask_i, min_size=min_size)
+                clean_preds.append(mask_clean[None, ...])  # (1,H,W)
+
+            clean_preds = np.stack(clean_preds, axis=0)   # (B,1,H,W)
+            clean_preds = torch.from_numpy(clean_preds).float().to(device)
+
+            inter += (clean_preds * y).sum().item()
+            union += (clean_preds.sum() + y.sum()).item()
+
+    dice = (2 * inter + 1e-7) / (union + 1e-7)
+    return dice
+
+
+
     
