@@ -661,18 +661,22 @@ def predict_and_build_submission(
             mask = (probs > threshold).float()
 
             # Escalar min_size a la nueva resolución
+            # TODO: min_size_scaled no se usa
             if use_post_proc:
                 scale_area = (800 * 800) / (H_orig * W_orig)
                 min_size_scaled = int(min_size * scale_area)
             else:
                 min_size_scaled = min_size            
 
+            print(f"mask shape: {mask.shape}")
+            print(f"batch shape: {mask.shape[0]} range: {range(mask.shape[0])}")
             # Guardar "pre" para debug
             if debug and use_post_proc:
-                # asumimos batch_size=1; si no, iterar sobre dim 0
-                pre_np = mask.squeeze().cpu().numpy().astype(np.uint8)
-                debug_pre_masks.append(pre_np)
-                debug_names.append(name[0])
+                # Iterar sobre cada elemento del batch
+                for i in range(mask.shape[0]):
+                    pre_np = mask[i].squeeze().cpu().numpy().astype(np.uint8)
+                    debug_pre_masks.append(pre_np)
+                    debug_names.append(name[i])
                 
             # ---------- POST-PROCESADO OPCIONAL ----------
             if use_post_proc:
@@ -680,14 +684,19 @@ def predict_and_build_submission(
 
             # Guardar "post" para debug
             if debug and use_post_proc:
-                post_np = mask.squeeze().cpu().numpy().astype(np.uint8)
-                debug_post_masks.append(post_np)               
+                # Iterar sobre cada elemento del batch
+                for i in range(mask.shape[0]):
+                    post_np = mask[i].squeeze().cpu().numpy().astype(np.uint8)
+                    debug_post_masks.append(post_np)               
 
-            mask_np = mask.squeeze().cpu().numpy().astype(np.uint8)
-            rle = rle_encode(mask_np)
-
-            image_ids.append(name[0])
-            encoded_pixels.append(rle)
+            # Procesar cada elemento del batch
+            batch_size = mask.shape[0]
+            for i in range(batch_size):
+                mask_np = mask[i].squeeze().cpu().numpy().astype(np.uint8)
+                rle = rle_encode(mask_np)
+                
+                image_ids.append(name[i])
+                encoded_pixels.append(rle)
 
     # ==========================
     # PLOTEO EN GRILLA (debug)
