@@ -4,7 +4,7 @@
  - [ ] **Post** procesado de mascaras por si quedan con ruido o hueco
  - [x] Nuevo umbral sigmoid
  - [ ] Probar learning rate scheduler
- - [ ] (!!) Arreglar funcion de submission para que funcione bien para batch_size > 1. Actualmente hay que correr el dataloader de kaggle con batch_size=1 antes de llamar a la funcion de la submission para que retorne bien la cantidad de filas.
+ - [x] (!!) Arreglar funcion de submission para que funcione bien para batch_size > 1. Actualmente hay que correr el dataloader de kaggle con batch_size=1 antes de llamar a la funcion de la submission para que retorne bien la cantidad de filas.
  - [ ] FOCAL TVERSKY LOSS
  - [ ] Fine tunning
  - [ ] Investigar efecto de **pre**procesado de imagenes, mas alla del data augmentation
@@ -97,11 +97,16 @@ UNet + attention:
 * https://arxiv.org/pdf/1804.03999
 * https://www.kaggle.com/code/utkarshsaxenadn/person-segmentation-attention-unet ---> en esta muestran predicted mask vs true mask durante training!!!
 
-UNet for human segmentation, con arquitectura original: 
+UNet for human segmentation: 
 * https://towardsdev.com/human-segmentation-using-u-net-with-source-code-easiest-way-f78be6e238f9
+* https://www.kaggle.com/code/divakaivan12/human-image-segmentation-with-unet
 
 FOCAL TVERSKY LOSS
 * https://arxiv.org/pdf/1810.07842, usar esta loss en los ultimos 10/20 epoch 
 * https://www.igi-global.com/pdf.aspx?tid=315756&ptid=310168&ctid=4&oa=true&isxn=9781668479315
 
+UNet usando efficientnet-b4 pre-entrenado:
+* https://www.kaggle.com/code/chihjungwang/human-segmentation-by-pytorch-iou-0-92
 
+Repo con links a todas las variantes de UNet:
+* https://github.com/ShawnBIT/UNet-family
