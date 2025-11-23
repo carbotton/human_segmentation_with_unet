@@ -110,3 +110,9 @@ UNet usando efficientnet-b4 pre-entrenado:
 
 Repo con links a todas las variantes de UNet:
 * https://github.com/ShawnBIT/UNet-family
+
+U²Net:
+* https://arxiv.org/pdf/2005.09007v1 : segmentacion de cualquier cosa
+
+UNet++:
+* https://arxiv.org/pdf/1807.10165
