@@ -9,6 +9,9 @@
  - [ ] FOCAL TVERSKY LOSS
  - [ ] Fine tunning
  - [ ] Scheduler learning rate
+ - [x] (!!) Arreglar funcion de submission para que funcione bien para batch_size > 1. Actualmente hay que correr el dataloader de kaggle con batch_size=1 antes de llamar a la funcion de la submission para que retorne bien la cantidad de filas.
+ - [ ] FOCAL TVERSKY LOSS
+ - [ ] Fine tunning
  - [ ] Investigar efecto de **pre**procesado de imagenes, mas alla del data augmentation
  - [ ] Tratar el problema como si tuviera clases desbalanceadas -- hay mas fondo que persona
  - [ ] Probar que sobre el final use la Focal Loss
@@ -101,9 +104,23 @@ UNet + attention:
 
 UNet for human segmentation, con arquitectura original: 
 * https://towardsdev.com/human-segmentation-using-u-net-with-source-code-easiest-way-f78be6e238f9
+UNet for human segmentation: 
+* https://towardsdev.com/human-segmentation-using-u-net-with-source-code-easiest-way-f78be6e238f9
+* https://www.kaggle.com/code/divakaivan12/human-image-segmentation-with-unet
 
 FOCAL TVERSKY LOSS
 * https://arxiv.org/pdf/1810.07842, usar esta loss en los ultimos 10/20 epoch 
 * https://www.igi-global.com/pdf.aspx?tid=315756&ptid=310168&ctid=4&oa=true&isxn=9781668479315
 
 
+UNet usando efficientnet-b4 pre-entrenado:
+* https://www.kaggle.com/code/chihjungwang/human-segmentation-by-pytorch-iou-0-92
+
+Repo con links a todas las variantes de UNet:
+* https://github.com/ShawnBIT/UNet-family
+
+U²Net:
+* https://arxiv.org/pdf/2005.09007v1 : segmentacion de cualquier cosa
+
+UNet++:
+* https://arxiv.org/pdf/1807.10165
