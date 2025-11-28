@@ -182,9 +182,12 @@ def train(
 
             train_loss /= len(train_loader)  # calculamos la perdida promedio de la epoca
             epoch_train_errors.append(train_loss)  # guardamos la perdida de entrenamiento
-            val_loss = evaluate(
-                model, criterion, val_loader, device
-            )  # evaluamos el modelo en el conjunto de validacion
+            if len(val_loader) > 0:
+                val_loss = evaluate(
+                    model, criterion, val_loader, device
+                )  # evaluamos el modelo en el conjunto de validacion
+            else: 
+                val_loss = 0
             epoch_val_errors.append(val_loss)  # guardamos la perdida de validacion
             
             # Guardar mejor modelo
