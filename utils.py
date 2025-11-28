@@ -554,7 +554,9 @@ def predict_and_build_submission(
     target_class=1,   # usado solo si el modelo es multiclass
     use_post_proc=False,
     min_size=50,
-    debug=False
+    debug=False, 
+    mean=None, 
+    std=None
 ):
     """
     Genera un submission.csv (con timestamp) a partir de un modelo de segmentación
@@ -577,8 +579,8 @@ def predict_and_build_submission(
     image_ids = []
     encoded_pixels = []
     
-    debug_pre_masks = []
-    debug_post_masks = []
+    debug_imgs = []
+    debug_masks = []
     debug_names = []
 
     with torch.no_grad():
@@ -595,27 +597,21 @@ def predict_and_build_submission(
 
             probs = torch.sigmoid(logits_big)
             mask = (probs > threshold).float()        
-
-            #print(f"mask shape: {mask.shape}")
-            #print(f"batch shape: {mask.shape[0]} range: {range(mask.shape[0])}")
-            # Guardar "pre" para debug
-            if debug and use_post_proc:
-                # Iterar sobre cada elemento del batch
-                for i in range(mask.shape[0]):
-                    pre_np = mask[i].squeeze().cpu().numpy().astype(np.uint8)
-                    debug_pre_masks.append(pre_np)
-                    debug_names.append(name[i])
                 
             # ---------- POST-PROCESADO OPCIONAL ----------
             if use_post_proc:
-                mask = postprocess_batch(mask, min_size=min_size).to(device)          
+                mask = postprocess_batch(mask, min_size=min_size).to(device) 
 
-            # Guardar "post" para debug
-            if debug and use_post_proc:
-                # Iterar sobre cada elemento del batch
-                for i in range(mask.shape[0]):
-                    post_np = mask[i].squeeze().cpu().numpy().astype(np.uint8)
-                    debug_post_masks.append(post_np)               
+            if debug and use_post_proc and len(debug_imgs) < 10:
+                batch_size = mask.shape[0]
+                for i in range(batch_size):
+                    if len(debug_imgs) >= 10:
+                        break
+                    debug_imgs.append(x[i].detach().cpu())
+                    debug_masks.append(
+                        mask[i].squeeze().cpu().numpy().astype(np.uint8)
+                    )
+                    debug_names.append(name[i])     
 
             # Procesar cada elemento del batch
             batch_size = mask.shape[0]
@@ -627,36 +623,32 @@ def predict_and_build_submission(
                 encoded_pixels.append(rle)
 
     # ==========================
-    # PLOT EN GRILLA (debug)
+    # PLOT DEBUG (layout igual a visualizar_test)
     # ==========================
-    if debug and use_post_proc and len(debug_pre_masks) > 0:
-        #n_imgs = len(debug_pre_masks)
-        n_imgs = 18
-        total_slots = 2 * n_imgs  # pre y post
-        cols = 6
-        rows = math.ceil(total_slots / cols)
+    if debug and use_post_proc and len(debug_imgs) > 0:
 
-        plt.figure(figsize=(cols * 2, rows * 2))  # imágenes más chicas
+        n = len(debug_imgs)
+        fig, axs = plt.subplots(2, n, figsize=(3*n, 6))
 
-        for i in range(n_imgs):
-            # Índices de subplot (0-based) para pre y post
-            pre_idx = 2 * i
-            post_idx = 2 * i + 1
+        if n == 1:  # asegurar shape 2×1
+            axs = np.array(axs).reshape(2, 1)
 
-            # PRE
-            ax_pre = plt.subplot(rows, cols, pre_idx + 1)
-            ax_pre.imshow(debug_pre_masks[i], cmap="gray")
-            ax_pre.set_title(f"{debug_names[i]} - pre", fontsize=8)
-            ax_pre.axis("off")
+        for i in range(n):
+            # ---- Imagen ----
+            img_vis = denormalize(debug_imgs[i], mean, std).clamp(0,1)
+            img_vis = img_vis.permute(1,2,0)
 
-            # POST
-            ax_post = plt.subplot(rows, cols, post_idx + 1)
-            ax_post.imshow(debug_post_masks[i], cmap="gray")
-            ax_post.set_title(f"{debug_names[i]} - post", fontsize=8)
-            ax_post.axis("off")
+            axs[0, i].imshow(img_vis)
+            axs[0, i].set_title(f"{debug_names[i]}", fontsize=8)
+            axs[0, i].axis("off")
 
-        plt.tight_layout()
-        plt.show()            
+            # ---- Máscara post-proc ----
+            axs[1, i].imshow(debug_masks[i], cmap="gray")
+            axs[1, i].set_title("pred (post)", fontsize=8)
+            axs[1, i].axis("off")
+
+        plt.tight_layout(pad=0.3)
+        plt.show()           
 
     ####### SUBMISSION
     df = pd.DataFrame({"id": image_ids, "encoded_pixels": encoded_pixels})
@@ -1000,7 +992,7 @@ def predict_and_build_submission_tta(
     # ==========================
     if debug and use_post_proc and len(debug_pre_masks) > 0:
         #n_imgs = len(debug_pre_masks)
-        n_imgs = 18
+        n_imgs = 12
         total_slots = 2 * n_imgs  # pre y post
         cols = 6
         rows = math.ceil(total_slots / cols)
@@ -1011,16 +1003,10 @@ def predict_and_build_submission_tta(
             pre_idx = 2 * i
             post_idx = 2 * i + 1
 
-            # PRE
-            ax_pre = plt.subplot(rows, cols, pre_idx + 1)
-            ax_pre.imshow(debug_pre_masks[i], cmap="gray")
-            ax_pre.set_title(f"{debug_names[i]} - pre", fontsize=8)
-            ax_pre.axis("off")
-
             # POST
             ax_post = plt.subplot(rows, cols, post_idx + 1)
             ax_post.imshow(debug_post_masks[i], cmap="gray")
-            ax_post.set_title(f"{debug_names[i]} - post", fontsize=8)
+            ax_post.set_title(f"{debug_names[i]}", fontsize=8)
             ax_post.axis("off")
 
         plt.tight_layout()
@@ -1073,7 +1059,7 @@ def match_output_to_dim(output, dim=800):
         output = F.interpolate(output, size=dim, mode="bilinear", align_corners=False)
     return output
 
-def denormalize(img, mean_rgb, std_rgb):
+def denormalize(img, mean, std):
     """
     img: tensor (C,H,W) normalizado
     devuelve tensor (C,H,W) en [0,1] aprox
