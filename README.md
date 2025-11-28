@@ -134,24 +134,35 @@ UNet++:
 # Transforms
 # Models
 ## UNet
-## Losses
+## UNetAtt
+## UNet++
+# Losses
 * Dice binaria
 * Dice + BCEWithLogits: combined_loss
 * combined_loss + bordes: combined_loss_edge
-## Funciones auxiliares
-Aca podemos explicar que hacen pero el codigo lo ponemos en utils
+* hablar del ruso -> ver anexo
 # Entrenamiento
-## Parte 1: UNet original
+## UNet original
 ### Intro:
-Partimos de la UNet implementada tal cual está en el paper e hicimos un entrenamiento con pocas épocas para probar. Vimos que la loss no bajaba y cuando terminó el entrenamiento, el dice era demasiado bajo. Con esto descartamos.
-Luego de eso probamos usar padding y solamente con este cambio pasamos de un dice de casi 0 a 0.79.
-El siguiente paso fue probar imagenes RGB y saltamos a 0.83.
-Luego hicimos pruebas con batch norm y dropout.
-....
+* Partimos de la UNet implementada tal cual está en el paper e hicimos un entrenamiento con pocas épocas para probar. Vimos que la loss no bajaba y cuando terminó el entrenamiento, el dice era demasiado bajo. Con esto descartamos.
+* Luego de eso probamos usar padding y solamente con este cambio pasamos de un dice de casi 0 a 0.79.
+* El siguiente paso fue probar imagenes RGB y saltamos a 0.83.
+* Luego hicimos pruebas con batch norm y dropout. Aplicando dropout luego de cada convolucion con una probabilidad de 0.3 el modelo no sobreajusta y alcanza una dice de 0.89 pero inspeccionando las mascaras generadas vemos que se puede mejorar. Ademas, aplicar dropout al final de cada capa es demasiado agresivo y podemos estar perdiendo mucha informacion.
+Probamos casos solamente con dropout y corroboramos que el resultado empeoraba significativamente en comparacion con los casos en que fue combinado con batch norm.
+* Experimentamos con post-procesado, con y sin TTA, y encontramos que en practicamente todos los casos, usar TTA mejoro el resultado
+* Cuando empezamos a usar la loss enfocada en bordes tambien vimos mejoras, y esto se noto aun mas en casos en los que veiamos que la mascara generada no lograba definir bien a la persona en la imagen.
+* En varias instancias partimos de un modelo que ya nos habia dado bien y continuamos entrenandolo con algunos cambios (fine tuning), pero esto no genero mejoras significativas, por lo que entendimos que el modelo que estabamos usando de base ya habia alcanzado su capacidad maxima y decidimos explorar otras arquitecturas.
+* El uso de data augmentation no mejoro el resultado en ninguno de los casos. Sospechamos que tal vez las augmentations fueran muy agresivas pero cuando bajamos los valores que estabamos usando, tampoco vimos una gran mejora. Puede que esto se deba a las combinaciones que hicimos en las pruebas.
+* Hicimos pruebas con dropout solamente en capas profundas. 
+### Experimentos
+## Parte 2: UNetAtt
 			
 # Conclusiones
 # Anexos
 ## A: Focal Tivershjy
 ## B: Otros modelos
+## Funciones auxiliares
+Aca podemos explicar que hacen pero el codigo lo ponemos en utils
+		
 		
 	
