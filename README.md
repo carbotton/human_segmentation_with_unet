@@ -124,3 +124,34 @@ U²Net:
 
 UNet++:
 * https://arxiv.org/pdf/1807.10165
+
+# ================== OUTLINE ========================
+# Letra
+# Imports e inicializaciones
+# Dataset
+# Exploracion de datos
+# Dataloaders
+# Transforms
+# Models
+## UNet
+## Losses
+* Dice binaria
+* Dice + BCEWithLogits: combined_loss
+* combined_loss + bordes: combined_loss_edge
+## Funciones auxiliares
+Aca podemos explicar que hacen pero el codigo lo ponemos en utils
+# Entrenamiento
+## Parte 1: UNet original
+### Intro:
+Partimos de la UNet implementada tal cual está en el paper e hicimos un entrenamiento con pocas épocas para probar. Vimos que la loss no bajaba y cuando terminó el entrenamiento, el dice era demasiado bajo. Con esto descartamos.
+Luego de eso probamos usar padding y solamente con este cambio pasamos de un dice de casi 0 a 0.79.
+El siguiente paso fue probar imagenes RGB y saltamos a 0.83.
+Luego hicimos pruebas con batch norm y dropout.
+....
+			
+# Conclusiones
+# Anexos
+## A: Focal Tivershjy
+## B: Otros modelos
+		
+	
