@@ -12,7 +12,9 @@ import cv2
 from sklearn.metrics import (
     accuracy_score,
     classification_report,
+    confusion_matrix
 )
+
 from datetime import datetime
 from itertools import product
 from scipy.ndimage import binary_opening, binary_closing, label
@@ -1111,3 +1113,66 @@ def visualizar_test(model, loader, device, mean_rgb, std_rgb, n=10, threshold=0.
     plt.tight_layout(pad=0.3)
     plt.show()
 
+# NCLASSES = 1
+@torch.no_grad()
+def model_segmentation_report(model, dataloader, device, nclasses, do_confusion_matrix=True, show_dice_loss=True, threshold=0.5):
+
+    model.eval()
+    ys, ps = [], []
+    dice_vals = []
+
+    for x, y in dataloader:
+        x = x.to(device)
+        y = y.to(device)  # y: (N,H,W) long
+        logits = model(x)                         # (N,C,h,w)
+        logits = F.interpolate(logits, size=y.shape[-2:], mode='bilinear', align_corners=False)
+
+        # Alinear tamaños
+        #logits = match_output_dim(logits, y)
+
+        if show_dice_loss and nclasses == 1:
+            dice_vals.append(dice_binaria(logits, y).item())
+
+        if nclasses == 1:
+            probs = torch.sigmoid(logits)
+            pred = (probs >= threshold).long().squeeze(1)  # (N,h,w)          
+
+        # Aplanar por píxel
+        ys.append(y.detach().cpu().numpy().ravel())
+        ps.append(pred.detach().cpu().numpy().ravel())
+
+    y_true = np.concatenate(ys, axis=0)
+    y_pred = np.concatenate(ps, axis=0)
+
+    labels = [0,1] if nclasses == 1 else list(range(nclasses))
+    target_names = ['no-persona','persona'] if nclasses == 1 else [str(i) for i in labels]    
+
+    acc = accuracy_score(y_true, y_pred)
+    report = classification_report(
+        y_true, y_pred,
+        labels=labels,
+        target_names=target_names,
+        output_dict=True,
+        zero_division=0
+    )
+
+    if report.get("accuracy") is not None and not isinstance(report["accuracy"], dict):
+        report["accuracy"] = {"f1-score": report["accuracy"]}
+
+    if show_dice_loss and nclasses == 1:
+        mean_dice = float(np.mean(dice_vals)) if dice_vals else 0.0
+        # por clase positiva "1"
+        report.setdefault("1", {})["dice"] = mean_dice
+        # promedios
+        report.setdefault("macro avg", {})["dice"] = mean_dice
+        report.setdefault("weighted avg", {})["dice"] = mean_dice
+
+    print(f"Accuracy: {acc:.4f}")
+    print_metrics_report(report)
+
+    cm = None
+    if do_confusion_matrix:
+        cm = confusion_matrix(y_true, y_pred, labels=labels)
+        plot_confusion_matrix(cm, title="Confusion matrix")
+
+    return acc, report, cm
