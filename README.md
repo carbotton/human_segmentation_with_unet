@@ -1,99 +1,133 @@
-# PENDIENTES
- - [x] Guardar pesos del modelo durante entrenamiento
- - [ ] Agregar jitter en transforms y ver si mejora
- - [ ] **Post** procesado de mascaras por si quedan con ruido o hueco
- - [x] Nuevo umbral sigmoid
- - [ ] Probar learning rate scheduler
- - [ ] (!!) Arreglar funcion de submission para que funcione bien para batch_size > 1. Actualmente hay que correr el dataloader de kaggle con batch_size=1 antes de llamar a la funcion de la submission para que retorne bien la cantidad de filas.
- - [ ] Investigar efecto de preprocesado de imagenes, mas alla del data augmentation
- - [ ] FOCAL TVERSKY LOSS
- - [ ] Fine tunning
- - [ ] Scheduler learning rate
- - [x] (!!) Arreglar funcion de submission para que funcione bien para batch_size > 1. Actualmente hay que correr el dataloader de kaggle con batch_size=1 antes de llamar a la funcion de la submission para que retorne bien la cantidad de filas.
- - [ ] FOCAL TVERSKY LOSS
- - [ ] Fine tunning
- - [ ] Investigar efecto de **pre**procesado de imagenes, mas alla del data augmentation
- - [ ] Tratar el problema como si tuviera clases desbalanceadas -- hay mas fondo que persona
- - [ ] Probar que sobre el final use la Focal Loss
- 
- 
-# RESULTADOS
+# Segmentación de Personas con U-Net 
 
-| Experimento (aprox)                                            | Celda | Modelo            | Dice (test) |
-| -------------------------------------------------------------- | ----- | ----------------- | ----------- |
-| UNet original, B/N, padding 0                                  | 75    | `model_1_2`       | **0.12**    |
-| UNet, padding=1, B/N                                           | 80    | `unet_pad_1`      | **0.80**    |
-| UNet, padding=1, B/N                                           | 80    | `unet_pad_1`      | **0.84**    |
-| UNet, padding=1, RGB                                           | 87    | `unet_rgb`        | **0.83**    |
-| UNet, RGB, BN + Dropout                                        | 94    | `unet_rgb_2`      | **0.89**    |
-| UNet, RGB, solo Dropout                                        | 100   | `unet_rgb_drop`   | **0.82**    |
-| UNet, RGB, BN + Dropout + data aug                             | 107   | `unet_rgb_3`      | **0.80**    |
-| UNet, B/N, Dice + BCE                                          | 117   | `unet_dice`       | **0.68**    |
-| UNet, RGB, Dice + BCE                                          | 121   | `unet_rgb_dice`   | **0.81**    |
-| UNet, RGB, Dice + BCE + “nuevas transforms”                    | 129   | `unet_rgb_dice_2` | **0.71**    |
-| UNetAttention, RGB, Dropout + DA, Dice + BCE                   | 136   | `unet_att`        | **0.82**    |
-| UNetAttention re-entrenado (loss ponderada + LR un poco mayor) | 150   | `unet_att_2`      | **0.81**    |
-| UNetAttention, RGB, BN, Dropout, SIN data aug                  | 150   | `unet_att_3`      | **0.88**    |
-| UNetAttention, RGB, BN, Dropout, SIN data aug + POST PROC      | 150   | `unet_att_3`      | **0.90**    |
+Este proyecto aborda la **segmentación binaria de personas** en imágenes utilizando redes convolucionales del tipo **U-Net** y variantes más avanzadas. Se trabajó con el dataset provisto en la materia Taller de Deep Learning (derivado de un desafío de Kaggle), donde cada imagen contiene una persona cuya máscara debe ser predicha píxel a píxel.
+
+El objetivo final es obtener un modelo capaz de generar segmentaciones robustas para el set de test y producir un `submission.csv` compatible con Kaggle.
+
+---
+
+## 1. Motivación
+
+La segmentación de personas es un problema clásico donde:
+
+* Hay gran variabilidad en iluminación, tamaño de la persona, pose, fondo y color.
+* El dataset contiene imágenes de **800×800**, que por limitaciones de hardware se redujeron a **256×256**.
+* Existen muchas imágenes difíciles: personas muy chicas, recortadas, en blanco y negro o con fuerte brillo.
+
+Este contexto motiva explorar **arquitecturas simples pero bien regularizadas**, así como evaluar técnicas de **data augmentation**, **postprocesamiento** y varias **configuraciones de loss**.
+
+---
+
+## 2. Flujo general del proyecto
+
+El notebook sigue una narrativa secuencial:
+
+1. **Carga y preprocesamiento de datos**
+
+   * Normalización para RGB y B/N.
+   * Máscaras convertidas a valores enteros (0/1).
+   * Redimensionamiento a 256×256.
+
+2. **Construcción del dataset y dataloaders**
+
+   * División en train / val.
+   * Transformaciones base + augmentations moderadas.
+
+3. **Arquitecturas evaluadas**
+
+   * **U-Net:** implementada tal y como se ve en el paper de UNet.
+   * **U-Net mejorada:** padding=1, entrada RGB, BatchNorm, Dropout...
+   * **Variantes:** UNet++, UNet Attention, Residual U-Net, LeakyReLU aggressive.
+
+4. **Loss functions**
+
+   * BCEWithLogits
+   * BCEWithLogits + Dice
+   * Combined loss ponderada
+   * Combined loss edge
+   * Focal Tversky 
+
+---
+
+## 3. Principales hallazgos
+
+### 3.1 UNet base → rendimiento insuficiente
+
+La U-Net clásica con entrada en B/N y padding=0 produce un Dice bajo (~0.41). Sirve solo como baseline.
+
+### 3.2 Aportes clave a la mejora
+
+Las decisiones que más impacto tuvieron fueron:
+
+* **Entrada RGB:** mejora notable respecto a usar B/N.
+* **Padding = 1:** mantiene la resolución entre capas y mejora bordes.
+* **BatchNorm:** estabiliza el entrenamiento.
+* **Dropout:** reduce sobreajuste.
+* **Máscara en formato entero (0/1):** evita inconsistencias en la loss.
+* **Combined loss:** mejor balance entre precisión y recall.
+
+### 3.3 Modelos complejos no mejoraron
+
+UNet++, UNet Attention, variantes residuales y Focal Tversky fueron probados, pero **ninguno superó a la U-Net mejorada**, confirmando que una arquitectura simple pero bien regularizada puede ser suficiente para este dataset.
+
+---
+
+## 4. Mejor modelo obtenido
+
+**Arquitectura:** 
+**Loss:** 
+**Tamaño entrada:** 256×256
+**Dice en validación:** 
+**Score Kaggle:** 
+
+---
+
+## 5. Postprocesado
+
+Se aplicó un proceso ligero para:
+
+* Eliminar componentes pequeñas (<50 px).
+* Suavizar ruido aislado.
+
+Aunque el impacto fue moderado, contribuyó a estabilizar el score en imágenes complejas.
+
+---
+
+## 6. Generación del submission
+
+El proyecto incluye funciones para:
+
+* Ejecutar inferencia sobre todo el set de test.
+* Aplicar postprocesado opcional.
+* Convertir máscaras a RLE.
+* Guardar el archivo `submission_YYYYMMDD.csv`.
+
+---
+
+## 7. Estructura del repositorio
+
+```
+.
+├── Obligatorio-letra-main.ipynb   # Notebook principal con la historia completa
+├── models/                        # Pesos .pth de los modelos entrenados
+├── utils.py                       # Helpers, funciones auxiliares y post-procesado
+├── submissions/                   # Generados desde el notebook
+├── README.md  
+├── config/kaggle.json
+├── assets/                    
+```
+
+---
+
+## 8. Conclusiones
+
+* La segmentación de personas requiere una combinación de **buen preprocesamiento**, **una arquitectura sólida**, y **regularización adecuada**.
+* Las variantes avanzadas no siempre implican mejoras; entender el dataset y regularizar correctamente es a menudo más importante.
+* El proyecto muestra un proceso iterativo realista: hipótesis → experimento → resultado → ajuste.
+* El mejor modelo combina **simplicidad, padding correcto, RGB, BatchNorm y Dropout**, logrando buena generalización.
 
 
-# INFO
-
-### Guardar pesos del modelo
-
-Se guardan en el train() -> pasar por parametro nombre de archivo que deje claro cual era la arquitectura
-
-Para restaurar:
-
-    model = UNet(n_class=1, padding=1).to(DEVICE) #crear modelo con misma arquitectura
-    
-    checkpoint = torch.load("best_model.pt", map_location=DEVICE)
-    model.load_state_dict(checkpoint["model_state_dict"])
-    model.eval()
-
-Para reanudar entrenamiento:
-
-    model = UNet(n_class=1, padding=1).to(DEVICE)
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-    
-    checkpoint = torch.load("best_model.pt", map_location=DEVICE)
-    model.load_state_dict(checkpoint["model_state_dict"])
-    optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-    start_epoch = checkpoint["epoch"] + 1
-
-### Clases y funciones
-class SegDataset: Para vincular imagen/mascara
-
-def load_image: 
-carga la imagen, la pasa a blanco y negro o RGB segun corresponda, y devuelve el tensor
-
-class TestSegmentationDataset: 
-como SegDataset pero solo para la carpeta TEST y NO busca mascaras (porque no hay)
-
-def get_seg_dataloaders: 
- * toma el dataset completo con SegDataset
- * genera train_ds , val_ds, test_ds : a partir de SegDataset
- * genera test_ds_kaggle : a partir de TestSegmentationDataset
- * devuelve los data loaders
-
-def center_crop: lo usa UNet
-
-def model_segmentation_report: 
-evalua el modelo + calcula y muestra metricas. Hay que tener cuidado con los tamaños, porque si no tenemos padding, la red devuelve imagenes mas chicas que la mascara y para poder compararlas tienen que coincidir.
-
-### Fine-tuning con una loss “más suave”, Estrategia práctica:
-
-* Entrenar como ahora (BCE+Dice).
-* Guardar el mejor checkpoint.
-* Cargarlo y entrenar solo 10–20 épocas más con Focal Tversky o con Dice puro, con LR más chico (ej. 1e-4 o 3e-5).
-
-### Scheduler
-optimizer = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-5)
-scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-    optimizer, mode="max", factor=0.5, patience=3, verbose=True
-)
-
-### Links
+## 9. Links útiles
 
 UNet con arquitectura modificada:
 * https://iopscience.iop.org/article/10.1088/1742-6596/1815/1/012018/pdf
@@ -112,7 +146,6 @@ FOCAL TVERSKY LOSS
 * https://arxiv.org/pdf/1810.07842, usar esta loss en los ultimos 10/20 epoch 
 * https://www.igi-global.com/pdf.aspx?tid=315756&ptid=310168&ctid=4&oa=true&isxn=9781668479315
 
-
 UNet usando efficientnet-b4 pre-entrenado:
 * https://www.kaggle.com/code/chihjungwang/human-segmentation-by-pytorch-iou-0-92
 
@@ -124,45 +157,3 @@ U²Net:
 
 UNet++:
 * https://arxiv.org/pdf/1807.10165
-
-# ================== OUTLINE ========================
-# Letra
-# Imports e inicializaciones
-# Dataset
-# Exploracion de datos
-# Dataloaders
-# Transforms
-# Models
-## UNet
-## UNetAtt
-## UNet++
-# Losses
-* Dice binaria
-* Dice + BCEWithLogits: combined_loss
-* combined_loss + bordes: combined_loss_edge
-* hablar del ruso -> ver anexo
-# Entrenamiento
-## UNet original
-### Intro:
-* Partimos de la UNet implementada tal cual está en el paper e hicimos un entrenamiento con pocas épocas para probar. Vimos que la loss no bajaba y cuando terminó el entrenamiento, el dice era demasiado bajo. Con esto descartamos.
-* Luego de eso probamos usar padding y solamente con este cambio pasamos de un dice de casi 0 a 0.79.
-* El siguiente paso fue probar imagenes RGB y saltamos a 0.83.
-* Luego hicimos pruebas con batch norm y dropout. Aplicando dropout luego de cada convolucion con una probabilidad de 0.3 el modelo no sobreajusta y alcanza una dice de 0.89 pero inspeccionando las mascaras generadas vemos que se puede mejorar. Ademas, aplicar dropout al final de cada capa es demasiado agresivo y podemos estar perdiendo mucha informacion.
-Probamos casos solamente con dropout y corroboramos que el resultado empeoraba significativamente en comparacion con los casos en que fue combinado con batch norm.
-* Experimentamos con post-procesado, con y sin TTA, y encontramos que en practicamente todos los casos, usar TTA mejoro el resultado
-* Cuando empezamos a usar la loss enfocada en bordes tambien vimos mejoras, y esto se noto aun mas en casos en los que veiamos que la mascara generada no lograba definir bien a la persona en la imagen.
-* En varias instancias partimos de un modelo que ya nos habia dado bien y continuamos entrenandolo con algunos cambios (fine tuning), pero esto no genero mejoras significativas, por lo que entendimos que el modelo que estabamos usando de base ya habia alcanzado su capacidad maxima y decidimos explorar otras arquitecturas.
-* El uso de data augmentation no mejoro el resultado en ninguno de los casos. Sospechamos que tal vez las augmentations fueran muy agresivas pero cuando bajamos los valores que estabamos usando, tampoco vimos una gran mejora. Puede que esto se deba a las combinaciones que hicimos en las pruebas.
-* Hicimos pruebas con dropout solamente en capas profundas. 
-### Experimentos
-## Parte 2: UNetAtt
-			
-# Conclusiones
-# Anexos
-## A: Focal Tivershjy
-## B: Otros modelos
-## Funciones auxiliares
-Aca podemos explicar que hacen pero el codigo lo ponemos en utils
-		
-		
-	
