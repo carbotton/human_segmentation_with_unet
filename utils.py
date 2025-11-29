@@ -1102,6 +1102,18 @@ def visualizar_test(model, loader, device, mean_rgb, std_rgb, n=10, threshold=0.
     plt.tight_layout(pad=0.3)
     plt.show()
 
+@torch.no_grad()
+def dice_binaria(logits, target, threshold=0.5, eps=1e-7):
+    if logits.dim()==3: logits = logits.unsqueeze(1)
+    if target.dim()==3: target = target.unsqueeze(1)
+    probs = torch.sigmoid(logits)
+    preds = (probs >= threshold).float()
+    target = (target > 0).float()
+    inter = (preds * target).sum(dim=(1,2,3))
+    denom = preds.sum(dim=(1,2,3)) + target.sum(dim=(1,2,3))
+    dice = torch.where(denom>0, (2*inter+eps)/(denom+eps), torch.ones_like(denom))
+    return dice.mean()
+
 # NCLASSES = 1
 @torch.no_grad()
 def model_segmentation_report(model, dataloader, device, nclasses, do_confusion_matrix=True, show_dice_loss=True, threshold=0.5):
