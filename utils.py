@@ -878,7 +878,9 @@ def predict_and_build_submission_tta(
     target_class=1,   # usado solo si el modelo es multiclass
     use_post_proc=False,
     min_size=5000,
-    debug=False
+    debug=False,
+    mean=None,
+    std=None
 ):
     """
     Igual que predict_and_build_submission, pero con Test-Time Augmentation (TTA)
@@ -900,8 +902,8 @@ def predict_and_build_submission_tta(
     image_ids = []
     encoded_pixels = []
 
-    debug_pre_masks = []
-    debug_post_masks = []
+    debug_imgs = []
+    debug_masks = []
     debug_names = []
 
     with torch.no_grad():
@@ -957,30 +959,27 @@ def predict_and_build_submission_tta(
                 min_size_scaled = min_size
 
             # --------------------------
-            # 7) Debug: guardar "pre" antes del post-proc
-            # --------------------------
-            if debug and use_post_proc:
-                for i in range(mask.shape[0]):
-                    pre_np = mask[i].squeeze().cpu().numpy().astype(np.uint8)
-                    debug_pre_masks.append(pre_np)
-                    debug_names.append(name[i])
-
-            # --------------------------
-            # 8) POST-PROCESADO OPCIONAL
+            # 7) POST-PROCESADO OPCIONAL
             # --------------------------
             if use_post_proc:
                 mask = postprocess_batch(mask, min_size=min_size).to(device)
 
             # --------------------------
-            # 9) Debug: guardar "post"
+            # 8) Debug: guardar "post"
             # --------------------------
-            if debug and use_post_proc:
-                for i in range(mask.shape[0]):
-                    post_np = mask[i].squeeze().cpu().numpy().astype(np.uint8)
-                    debug_post_masks.append(post_np)
+            if debug and use_post_proc and len(debug_imgs) < 10:
+                batch_size = mask.shape[0]
+                for i in range(batch_size):
+                    if len(debug_imgs) >= 10:
+                        break
+                    debug_imgs.append(x[i].detach().cpu())
+                    debug_masks.append(
+                        mask[i].squeeze().cpu().numpy().astype(np.uint8)
+                    )
+                    debug_names.append(name[i])   
 
             # --------------------------
-            # 10) Codificar cada elemento del batch en RLE
+            # 9) Codificar cada elemento del batch en RLE
             # --------------------------
             batch_size = mask.shape[0]
             for i in range(batch_size):
@@ -991,29 +990,32 @@ def predict_and_build_submission_tta(
                 encoded_pixels.append(rle)
 
     # ==========================
-    # PLOT EN GRILLA (debug)
+    # PLOT DEBUG (layout igual a visualizar_test)
     # ==========================
-    if debug and use_post_proc and len(debug_pre_masks) > 0:
-        #n_imgs = len(debug_pre_masks)
-        n_imgs = 12
-        total_slots = 2 * n_imgs  # pre y post
-        cols = 6
-        rows = math.ceil(total_slots / cols)
+    if debug and use_post_proc and len(debug_imgs) > 0:
 
-        plt.figure(figsize=(cols * 2, rows * 2))  # imágenes más chicas
+        n = len(debug_imgs)
+        fig, axs = plt.subplots(2, n, figsize=(3*n, 6))
 
-        for i in range(n_imgs):
-            pre_idx = 2 * i
-            post_idx = 2 * i + 1
+        if n == 1:  # asegurar shape 2×1
+            axs = np.array(axs).reshape(2, 1)
 
-            # POST
-            ax_post = plt.subplot(rows, cols, post_idx + 1)
-            ax_post.imshow(debug_post_masks[i], cmap="gray")
-            ax_post.set_title(f"{debug_names[i]}", fontsize=8)
-            ax_post.axis("off")
+        for i in range(n):
+            # ---- Imagen ----
+            img_vis = denormalize(debug_imgs[i], mean, std).clamp(0,1)
+            img_vis = img_vis.permute(1,2,0)
 
-        plt.tight_layout()
-        plt.show()
+            axs[0, i].imshow(img_vis)
+            axs[0, i].set_title(f"{debug_names[i]}", fontsize=8)
+            axs[0, i].axis("off")
+
+            # ---- Máscara post-proc ----
+            axs[1, i].imshow(debug_masks[i], cmap="gray")
+            axs[1, i].set_title("pred (post)", fontsize=8)
+            axs[1, i].axis("off")
+
+        plt.tight_layout(pad=0.3)
+        plt.show()   
 
     # --------------------------
     # 11) SUBMISSION
