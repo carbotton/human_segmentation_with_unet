@@ -70,11 +70,11 @@ Las decisiones que más impacto tuvieron fueron:
 
 ## 4. Mejor modelo obtenido
 
-**Arquitectura:** UNet con bloques residuales, dropout y bloques de doble convolución.
+**Arquitectura:** UNet con bloques residuales, dropout, data augmentation y bloques de doble convolución.
 **Loss:** combined_loss_edge
 **Tamaño entrada:** 256×256
 **Dice en validación:** 0.95
-**Score Kaggle:** 0.93
+**Score Kaggle:** 0.94
 
 ---
 
