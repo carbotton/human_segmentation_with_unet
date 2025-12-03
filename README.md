@@ -66,19 +66,15 @@ Las decisiones que más impacto tuvieron fueron:
 * **Máscara en formato entero (0/1):** evita inconsistencias en la loss.
 * **Combined loss:** mejor balance entre precisión y recall.
 
-### 3.3 Modelos complejos no mejoraron
-
-UNet++, UNet Attention, variantes residuales y Focal Tversky fueron probados, pero **ninguno superó a la U-Net mejorada**, confirmando que una arquitectura simple pero bien regularizada puede ser suficiente para este dataset.
-
 ---
 
 ## 4. Mejor modelo obtenido
 
-**Arquitectura:** 
-**Loss:** 
+**Arquitectura:** UNet con bloques residuales, dropout y bloques de doble convolución.
+**Loss:** combined_loss_edge
 **Tamaño entrada:** 256×256
-**Dice en validación:** 
-**Score Kaggle:** 
+**Dice en validación:** 0.95
+**Score Kaggle:** 0.93
 
 ---
 
