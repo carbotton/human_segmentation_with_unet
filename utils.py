@@ -1,0 +1,1181 @@
+import torch
+import torch.nn.functional as F
+import matplotlib.pyplot as plt
+
+import wandb, json
+import numpy as np
+import seaborn as sns
+import pandas as pd
+import math
+import cv2
+
+from sklearn.metrics import (
+    accuracy_score,
+    classification_report,
+    confusion_matrix
+)
+
+from datetime import datetime
+from itertools import product
+from scipy.ndimage import binary_opening, binary_closing, label
+
+TARGET_NAMES = ["background", "foreground"]
+
+def evaluate(model, criterion, data_loader, device):
+    """
+    Evalúa el modelo en los datos proporcionados y calcula la pérdida promedio.
+
+    Args:
+        model (torch.nn.Module): El modelo que se va a evaluar.
+        criterion (torch.nn.Module): La función de pérdida que se utilizará para calcular la pérdida.
+        data_loader (torch.utils.data.DataLoader): DataLoader que proporciona los datos de evaluación.
+
+    Returns:
+        float: La pérdida promedio en el conjunto de datos de evaluación.
+
+    """
+    model.eval()  # ponemos el modelo en modo de evaluacion
+    total_loss = 0  # acumulador de la perdida
+    with torch.no_grad():  # deshabilitamos el calculo de gradientes
+        for x, y in data_loader:  # iteramos sobre el dataloader
+            x = x.to(device)  # movemos los datos al dispositivo
+            y = y.to(device)  # movemos los datos al dispositivo
+            output = model(x)  # forward pass
+            output = F.interpolate(output, size=y.shape[-2:], mode='bilinear', align_corners=False)            
+            target = y.float()
+            
+            # 1. Eliminar dimensiones extra de tamaño 1
+            if target.ndim > 4:
+                target = target.squeeze()
+                
+            # 2. Asegurar la dimensión del canal
+            if target.ndim == 3:
+                target = target.unsqueeze(1)
+                
+            total_loss += criterion(output, target).item()  # acumulamos la perdida
+
+    return total_loss / len(data_loader)  # retornamos la perdida promedio
+
+
+class EarlyStopping:
+    def __init__(self, patience=5, delta=0.001):
+        """
+        Args:
+            patience (int): Cuántas épocas esperar después de la última mejora.
+        """
+        self.patience = patience
+        self.counter = 0
+        self.best_score = float("inf")
+        self.val_loss_min = float("inf")
+        self.early_stop = False
+        self.delta = delta
+
+    def __call__(self, val_loss):
+        # if val_loss > self.best_score + delta:
+        if val_loss > self.best_score + self.delta:
+            self.counter += 1
+            if self.counter >= self.patience:
+                self.early_stop = True
+        else:
+            self.best_score = val_loss
+            self.counter = 0
+
+
+def print_log(epoch, train_loss, val_loss, current_lr=None):
+    print(
+        f"Epoch: {epoch + 1:03d} | Train Loss: {train_loss:.5f} | Val Loss: {val_loss:.5f} | Current LR: {current_lr:.5f}"
+    )
+
+def match_mask(logits, y):
+    # y: (N,H,W) índices
+    if y.dim() == 4 and y.size(1) == 1:
+        y = y.squeeze(1)
+    if logits.shape[-2:] != y.shape[-2:]:
+        y = F.interpolate(
+            y.unsqueeze(1).float(),  # (N,1,H,W)
+            size=logits.shape[-2:],  # (h,w) de la salida
+            mode="nearest"
+        ).squeeze(1).long()
+    return y
+
+def train(
+    model,
+    optimizer,
+    criterion,
+    train_loader,
+    val_loader,
+    device,
+    scheduler=None,
+    do_early_stopping=True,
+    patience=5,
+    epochs=10,
+    log_fn=print_log,
+    log_every=1,
+    checkpoint_path=None,
+    save_optimizer=True,
+    loss_ponderada=True
+):
+    """
+    Entrena el modelo utilizando el optimizador y la función de pérdida proporcionados.
+
+    Args:
+        model (torch.nn.Module): El modelo que se va a entrenar.
+        optimizer (torch.optim.Optimizer): El optimizador que se utilizará para actualizar los pesos del modelo.
+        criterion (torch.nn.Module): La función de pérdida que se utilizará para calcular la pérdida.
+        train_loader (torch.utils.data.DataLoader): DataLoader que proporciona los datos de entrenamiento.
+        val_loader (torch.utils.data.DataLoader): DataLoader que proporciona los datos de validación.
+        device (str): El dispositivo donde se ejecutará el entrenamiento.
+        patience (int): Número de épocas a esperar después de la última mejora en val_loss antes de detener el entrenamiento (default: 5).
+        epochs (int): Número de épocas de entrenamiento (default: 10).
+        log_fn (function): Función que se llamará después de cada log_every épocas con los argumentos (epoch, train_loss, val_loss) (default: None).
+        log_every (int): Número de épocas entre cada llamada a log_fn (default: 1).
+        checkpoint_path: path al archivo donde se guardará el mejor modelo
+        save_optmizer: si es true guarda el estado del optimizer en un diccionario
+
+    Returns:
+        Tuple[List[float], List[float]]: Una tupla con dos listas, la primera con el error de entrenamiento de cada época y la segunda con el error de validación de cada época.
+
+    """
+    try:
+        epoch_train_errors = []  # error de traing para posterior analisis
+        epoch_val_errors = []  # error de validacion para posterior analisis
+        if do_early_stopping:
+            early_stopping = EarlyStopping(
+                patience=patience
+            )  # instanciamos el early stopping
+        best_val_loss = float("inf")  # para trackear el mejor modelo
+        
+        for epoch in range(epochs):  # loop de entrenamiento
+            model.train()  # ponemos el modelo en modo de entrenamiento
+            train_loss = 0  # acumulador de la perdida de entrenamiento
+            index = 0
+            for x, y in train_loader:
+                x = x.to(device)  # movemos los datos al dispositivo
+                y = y.to(device)  # movemos los datos al dispositivo
+
+                optimizer.zero_grad()  # reseteamos los gradientes
+
+                logits = model(x)                         # [N,1,H,W] logits
+                logits = F.interpolate(logits, size=y.shape[-2:], mode='bilinear', align_corners=False)
+
+                #batch_loss = criterion(logits, y.float().unsqueeze(1))target = y.float()
+                target = y.float()
+                # 1. Eliminar dimensiones extra de tamaño 1 (ej: [N, 1, 1, H, W] -> [N, H, W])
+                if target.ndim > 4:
+                    target = target.squeeze()
+                    
+                # 2. Asegurar la dimensión del canal (ej: [N, H, W] -> [N, 1, H, W])
+                if target.ndim == 3:
+                    target = target.unsqueeze(1)
+
+                if loss_ponderada:
+                    batch_loss = criterion(logits, target, ponderada=True)
+                else:
+                    batch_loss = criterion(logits, target)
+                #batch_loss = criterion(logits, y.float().unsqueeze(1))
+
+                batch_loss.backward()  # backpropagation
+                optimizer.step()  # actualizamos los pesos
+
+                train_loss += batch_loss.item()  # acumulamos la perdida
+                index += 1
+
+            train_loss /= len(train_loader)  # calculamos la perdida promedio de la epoca
+            epoch_train_errors.append(train_loss)  # guardamos la perdida de entrenamiento
+            if len(val_loader) > 0:
+                val_loss = evaluate(
+                    model, criterion, val_loader, device
+                )  # evaluamos el modelo en el conjunto de validacion
+            else: 
+                val_loss = 0
+            epoch_val_errors.append(val_loss)  # guardamos la perdida de validacion
+            
+            # Guardar mejor modelo
+            if checkpoint_path is not None and val_loss < best_val_loss:
+                best_val_loss = val_loss
+                checkpoint = {
+                    "epoch": epoch,
+                    "model_state_dict": model.state_dict(),
+                    "val_loss": val_loss,
+                    "train_loss": train_loss,
+                }
+                if save_optimizer:
+                    checkpoint["optimizer_state_dict"] = optimizer.state_dict()
+
+                torch.save(checkpoint, checkpoint_path)
+                
+                
+            if scheduler is not None:
+                scheduler.step(val_loss)
+
+            if do_early_stopping:
+                early_stopping(val_loss)  
+
+            if log_fn is not None: 
+                if epoch == 1 or ((epoch + 1) % log_every == 0):  # loggeamos cada log_every epocas
+                    current_lr = optimizer.param_groups[0]["lr"]
+                    log_fn(epoch, train_loss, val_loss, current_lr)  # llamamos a la funcion de log
+
+            if do_early_stopping and early_stopping.early_stop:
+                print(
+                    f"Detener entrenamiento en la época {epoch}, la mejor pérdida fue {early_stopping.best_score:.5f}"
+                )
+                break
+
+        return epoch_train_errors, epoch_val_errors
+    except Exception as e:
+        print(f"Error en el entrenamiento: {e}")
+        return None, None
+
+
+def plot_training(train_errors, val_errors):
+    # Graficar los errores
+    plt.figure(figsize=(10, 5))  # Define el tamaño de la figura
+    plt.plot(train_errors, label="Train Loss")  # Grafica la pérdida de entrenamiento
+    plt.plot(val_errors, label="Validation Loss")  # Grafica la pérdida de validación
+    plt.title("Training and Validation Loss")  # Título del gráfico
+    plt.xlabel("Epochs")  # Etiqueta del eje X
+    plt.ylabel("Loss")  # Etiqueta del eje Y
+    plt.legend()  # Añade una leyenda
+    plt.grid(True)  # Añade una cuadrícula para facilitar la visualización
+    plt.show()  # Muestra el gráfico
+
+
+def model_classification_report(model, dataloader, device, nclasses, output_dict=False, do_confusion_matrix=False):
+    # Evaluación del modelo
+    model.eval()
+
+    all_preds = []
+    all_labels = []
+
+    with torch.no_grad():
+        for inputs, labels in dataloader:
+            inputs = inputs.to(device)
+            outputs = model(inputs)
+            preds = torch.argmax(outputs, dim=1)
+            all_preds.extend(preds.cpu().numpy())
+            all_labels.extend(labels.numpy())
+
+    # Calcular precisión (accuracy)
+    accuracy = accuracy_score(all_labels, all_preds)
+    
+
+    report = classification_report(
+        all_labels, all_preds, target_names=[str(i) for i in range(nclasses)], 
+        output_dict=output_dict
+    )
+    if not output_dict:
+        print(f"Accuracy: {accuracy:.4f}\n")
+        print("Reporte de clasificación:\n", report)
+    else:
+        macroAvg = report["macro avg"]
+        return accuracy, macroAvg["precision"], macroAvg["recall"], macroAvg["f1-score"], macroAvg["support"]
+        
+    # Matriz de confusión
+    if do_confusion_matrix:
+        cm = confusion_matrix(all_labels, all_preds)
+        print("Matriz de confusión:\n", cm, "\n")
+
+    return report
+
+def show_tensor_image(tensor, title=None, vmin=None, vmax=None):
+    """
+    Muestra una imagen representada como un tensor.
+
+    Args:
+        tensor (torch.Tensor): Tensor que representa la imagen. Size puede ser (C, H, W).
+        title (str, optional): Título de la imagen. Por defecto es None.
+        vmin (float, optional): Valor mínimo para la escala de colores. Por defecto es None.
+        vmax (float, optional): Valor máximo para la escala de colores. Por defecto es None.
+    """
+    # Check if the tensor is a grayscale image
+    if tensor.shape[0] == 1:
+        plt.imshow(tensor.squeeze(), cmap="gray", vmin=vmin, vmax=vmax)
+    else:  # Assume RGB
+        plt.imshow(tensor.permute(1, 2, 0), vmin=vmin, vmax=vmax)
+    if title:
+        plt.title(title)
+    plt.axis("off")
+    plt.show()
+
+
+def show_tensor_images(tensors, titles=None, figsize=(15, 5), vmin=None, vmax=None):
+    """
+    Muestra una lista de imágenes representadas como tensores.
+
+    Args:
+        tensors (list): Lista de tensores que representan las imágenes. El tamaño de cada tensor puede ser (C, H, W).
+        titles (list, optional): Lista de títulos para las imágenes. Por defecto es None.
+        vmin (float, optional): Valor mínimo para la escala de colores. Por defecto es None.
+        vmax (float, optional): Valor máximo para la escala de colores. Por defecto es None.
+    """
+    num_images = len(tensors)
+    _, axs = plt.subplots(1, num_images, figsize=figsize)
+    for i, tensor in enumerate(tensors):
+        ax = axs[i]
+        # Check if the tensor is a grayscale image
+        if tensor.shape[0] == 1:
+            ax.imshow(tensor.squeeze(), cmap="gray", vmin=vmin, vmax=vmax)
+        else:  # Assume RGB
+            ax.imshow(tensor.permute(1, 2, 0), vmin=vmin, vmax=vmax)
+        if titles and titles[i]:
+            ax.set_title(titles[i])
+        ax.axis("off")
+    plt.show()
+
+
+def plot_sweep_metrics_comparison(accuracies, precisions, recalls, f1_scores, sweep_id, WANDB_PROJECT):
+    """
+    Crea un gráfico de barras que compara las métricas de rendimiento de diferentes runs de un sweep.
+    
+    Args:
+        accuracies (list): Lista de valores de accuracy para cada run
+        precisions (list): Lista de valores de precision para cada run
+        recalls (list): Lista de valores de recall para cada run
+        f1_scores (list): Lista de valores de f1-score para cada run
+        run_names (list): Lista de nombres de los runs
+        sweep_id (str): ID del sweep de Weights & Biases
+        WANDB_PROJECT (str): Nombre del proyecto de Weights & Biases
+    """
+   
+    
+    # Obtener todos los runs del sweep
+    api = wandb.Api()
+    ENTITY = api.default_entity
+    sweep = api.sweep(f"{ENTITY}/{WANDB_PROJECT}/{sweep_id}")
+
+    # Extraer datos de todos los runs
+    runs = []
+    run_names = []
+
+    for run in sweep.runs:
+        if run.state == "finished":  # Solo runs completados
+            runs.append(run)
+            run_names.append(run.name)
+
+    # Configurar colores para cada métrica
+    colors = ['skyblue', 'lightcoral', 'lightgreen', 'gold']
+    metrics = [accuracies, precisions, recalls, f1_scores]
+    metric_names = ['Accuracy', 'Precision', 'Recall', 'F1-Score']
+    y_labels = ['Accuracy', 'Precision', 'Recall', 'F1-Score']
+
+    # Crear gráfico combinado
+    x = np.arange(len(run_names))  # posiciones de las barras por modelo
+    width = 0.2  # ancho de cada barra
+
+    # Crear figura
+    fig, ax = plt.subplots(figsize=(14, 5))
+
+    # Dibujar cada métrica desplazada
+    for i, metric in enumerate(metrics):
+        if len(metric) != len(run_names):
+            print(f"Longitud de {metric_names[i]} ({len(metric)}) no coincide con run_names ({len(run_names)}). Se omite.")
+            continue
+        ax.bar(x + i*width, metric, width, label=metric_names[i], color=colors[i])
+
+    # Personalización
+    ax.set_xlabel("Modelos")
+    ax.set_ylabel("Puntaje")
+    ax.set_title("Comparación de Métricas por Modelo")
+    ax.set_xticks(x + width * (len(metrics)-1)/2)
+    ax.set_xticklabels(run_names)
+    ax.legend()
+    ax.grid(axis='y', linestyle='--', alpha=0.7)
+
+    # Mostrar
+    plt.tight_layout()
+    plt.show()
+
+    # Mostrar información adicional
+    print(f"\n=== RESUMEN DE MÉTRICAS ===")
+    print(f"Total de runs completados: {len(run_names)}")
+    print(f"\n--- Accuracy ---")
+    best_accuracy_index = np.argmax(accuracies)
+    print(f"Mejor: {run_names[best_accuracy_index]} {accuracies[best_accuracy_index]:.4f}")
+
+    print(f"\n--- Precision ---")
+    maxArg = np.argmax(precisions)
+    print(f"Mejor: {run_names[maxArg]} {precisions[maxArg]:.4f}")
+
+    print(f"\n--- Recall ---")
+    maxArg = np.argmax(recalls)
+    print(f"Mejor: {run_names[maxArg]} {recalls[maxArg]:.4f}")
+
+    print(f"\n--- F1-Score ---")
+    maxArg = np.argmax(f1_scores)
+    print(f"Mejor: {run_names[maxArg]} {f1_scores[maxArg]:.4f}")
+
+    # return best_accuracy_index run id
+    print(f"\n\nMejor run ID: {runs[best_accuracy_index].id}")
+    return runs[best_accuracy_index].id
+
+def summary_dict(r):
+    s = getattr(r, "summary_metrics", None)
+    if isinstance(s, str):
+        try:
+            return json.loads(s)
+        except Exception:
+            return {}
+    if isinstance(s, dict):
+        return s
+    # fallback para r.summary con wrapper antiguo
+    s2 = getattr(getattr(r, "summary", {}), "_json_dict", {})
+    if isinstance(s2, dict):
+        return s2
+    return {}
+
+# define download run function
+def download_run(run_id, WANDB_PROJECT, model_name="model.pth"):
+    """
+    Descarga los pesos de un run de Weights & Biases.
+    """
+   
+
+    api = wandb.Api()
+
+    ENTITY = api.default_entity  
+
+    # 1) Traer el run por path
+    run_path = f"{ENTITY}/{WANDB_PROJECT}/{run_id}"
+    run = api.run(run_path)
+
+    print("RUN:", run.id, "| name:", run.name)
+    print("URL:", run.url)
+    print("STATE:", run.state)
+    print("CONFIG:", dict(run.config))
+
+    # 2) Leer summary 
+
+    summary = summary_dict(run)
+    print("SUMMARY KEYS:", [k for k in summary.keys() if not k.startswith("_")])
+    print("val_loss:", summary.get("val_loss"))
+
+    # 3) Descargar el modelo de ese run
+    try:
+        run.file(model_name).download(replace=True)
+        print(f"Descargado: {model_name}")
+    except Exception as e:
+        print(f"No encontré {model_name} directamente:", e)
+        print("Buscando .pth disponibles en el run...")
+        pth_files = [f for f in run.files() if f.name.endswith(".pth")]
+        for f in pth_files:
+            print("->", f.name, f.size)
+        if pth_files:
+            pth_files[0].download(replace=True)
+            print("Descargado:", pth_files[0].name)
+        else:
+            print("No hay archivos .pth en este run.")
+
+    print("CONFIG:", run.config)
+    return run.config
+
+
+def plot_confusion_matrix(cm, title='Matriz de confusión'):
+    """
+    Grafica una matriz de confusión.
+    """
+    
+    plt.figure(figsize=(4, 3))
+    sns.heatmap(
+        cm,
+        annot=True,               # mostrar valores
+        fmt="d",                  # formato entero
+        cmap="RdPu",              # paleta de color
+        xticklabels=TARGET_NAMES, # etiquetas en eje X
+        yticklabels=TARGET_NAMES  # etiquetas en eje Y
+    )
+    plt.title(title)
+    plt.xlabel("Predicted label")
+    plt.ylabel("True label")
+    plt.tight_layout()
+    plt.show()
+
+
+def print_metrics_report(report, title="Reporte de clasificación:"):
+    """
+    Imprime un DataFrame de métricas (por ejemplo, el classification_report con Dice)
+    con formato legible: columnas centradas, espacio adicional, y líneas separadoras.
+
+    Parámetros
+    ----------
+    report : dict o DataFrame
+        Diccionario (como el devuelto por classification_report(output_dict=True))
+        o un DataFrame de métricas.
+    title : str, opcional
+        Título que se muestra antes del reporte (por defecto agrega un emoji 📊).
+
+    Ejemplo
+    -------
+    print_metrics_report(report_dict)
+    """
+
+    # imprimir dice si existe
+    if report["macro avg"]["dice"]:
+        print(f"Dice: {report['macro avg']['dice']:.4f}\n\n")
+
+
+    print(title + "\n")
+
+    # Convertir a DataFrame si aún no lo es
+    if not isinstance(report, pd.DataFrame):
+        df_report = pd.DataFrame(report).T
+    else:
+        df_report = report.copy()
+
+
+    # Redondear y ajustar visualmente
+    df_report = df_report.round(2)
+
+    # Reemplazar NaN por vacío
+    df_report = df_report.replace(np.nan, "", regex=True)
+
+    with pd.option_context(
+        "display.max_rows", None,
+        "display.max_columns", None,
+        "display.width", 130,
+        "display.colheader_justify", "center",
+    ):
+        print(df_report.to_string(index=True, justify="center", col_space=12))
+
+    print("=" * 90 + "\n")
+
+
+def rle_encode(mask):
+    pixels = np.array(mask).flatten(order='F')  # Aplanar la máscara en orden Fortran
+    pixels = np.concatenate([[0], pixels, [0]])  # Añadir ceros al principio y final
+    runs = np.where(pixels[1:] != pixels[:-1])[0] + 1  # Encontrar transiciones
+    runs[1::2] = runs[1::2] - runs[::2]  # Calcular longitudes
+    return ' '.join(str(x) for x in runs)
+
+
+def predict_and_build_submission(
+    model,
+    device,
+    data_loader,
+    out_csv="submission",
+    threshold=0.5,
+    target_class=1,   # usado solo si el modelo es multiclass
+    use_post_proc=False,
+    min_size=50,
+    debug=False, 
+    mean=None, 
+    std=None
+):
+    """
+    Genera un submission.csv (con timestamp) a partir de un modelo de segmentación
+    que puede ser binario (salida B,1,H,W) o multiclass (salida B,C,H,W).
+
+    - Binario: usa sigmoid y threshold.
+    - Multiclass: usa softmax y se queda con `target_class`, luego threshold.
+
+    Args:
+        model: modelo de segmentación
+        device: torch.device
+        img_dir: carpeta con las imágenes de test
+        out_csv: nombre base del csv (se le agrega datetime)
+        transform: mismas transforms determinísticas que en train (ToTensor, Normalize)
+        threshold: umbral para binarizar
+        target_class: clase de interés si el modelo tiene C>1 canales
+    """
+    model.eval()
+
+    image_ids = []
+    encoded_pixels = []
+    
+    debug_imgs = []
+    debug_masks = []
+    debug_names = []
+
+    with torch.no_grad():
+        for x, name in data_loader:
+            x = x.to(device)
+
+            logits = model(x)   # (1,1,256,256)
+
+            # Resize a 800×800 (lo que Kaggle espera)
+            H_orig, W_orig = logits.shape[-2], logits.shape[-1]
+            logits_big = F.interpolate(
+                logits, size=(800, 800), mode="bilinear", align_corners=False
+            )
+
+            probs = torch.sigmoid(logits_big)
+            mask = (probs > threshold).float()        
+                
+            # ---------- POST-PROCESADO OPCIONAL ----------
+            if use_post_proc:
+                mask = postprocess_batch(mask, min_size=min_size).to(device) 
+
+            if debug and use_post_proc and len(debug_imgs) < 10:
+                batch_size = mask.shape[0]
+                for i in range(batch_size):
+                    if len(debug_imgs) >= 10:
+                        break
+                    debug_imgs.append(x[i].detach().cpu())
+                    debug_masks.append(
+                        mask[i].squeeze().cpu().numpy().astype(np.uint8)
+                    )
+                    debug_names.append(name[i])     
+
+            # Procesar cada elemento del batch
+            batch_size = mask.shape[0]
+            for i in range(batch_size):
+                mask_np = mask[i].squeeze().cpu().numpy().astype(np.uint8)
+                rle = rle_encode(mask_np)
+                
+                image_ids.append(name[i])
+                encoded_pixels.append(rle)
+
+    # ==========================
+    # PLOT DEBUG (layout igual a visualizar_test)
+    # ==========================
+    if debug and use_post_proc and len(debug_imgs) > 0:
+
+        n = len(debug_imgs)
+        fig, axs = plt.subplots(2, n, figsize=(3*n, 6))
+
+        if n == 1:  # asegurar shape 2×1
+            axs = np.array(axs).reshape(2, 1)
+
+        for i in range(n):
+            # ---- Imagen ----
+            img_vis = denormalize(debug_imgs[i], mean, std).clamp(0,1)
+            img_vis = img_vis.permute(1,2,0)
+
+            axs[0, i].imshow(img_vis)
+            axs[0, i].set_title(f"{debug_names[i]}", fontsize=8)
+            axs[0, i].axis("off")
+
+            # ---- Máscara post-proc ----
+            axs[1, i].imshow(debug_masks[i], cmap="gray")
+            axs[1, i].set_title("pred (post)", fontsize=8)
+            axs[1, i].axis("off")
+
+        plt.tight_layout(pad=0.3)
+        plt.show()           
+
+    ####### SUBMISSION
+    df = pd.DataFrame({"id": image_ids, "encoded_pixels": encoded_pixels})
+
+    # nombre con datetime
+    ts = datetime.now().strftime("%d-%m-%Y_%H:%M")
+    csv_name = f"submissions/{out_csv}_{ts}.csv"
+    df.to_csv(csv_name, index=False)
+    print(f"submission guardado como: {csv_name}")
+
+    return df, csv_name
+
+
+def restaurar_modelo(
+    model,
+    optimizer=None,
+    checkpoint_path="best_model.pt",
+    device="cpu",
+):
+    """
+    Carga un modelo (y opcionalmente un optimizador) desde un checkpoint.
+
+    Args:
+        model (torch.nn.Module): Instancia del modelo con la misma arquitectura.
+        optimizer (torch.optim.Optimizer, opcional): Optimizer a restaurar.
+        checkpoint_path (str): Ruta del archivo .pt guardado.
+        device (str): Dispositivo donde cargar el modelo.
+
+    Returns:
+        model, optimizer, checkpoint: el modelo y optimizador actualizados, y el dict del checkpoint.
+    """
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+
+    # Restaurar pesos del modelo
+    model.load_state_dict(checkpoint["model_state_dict"])
+    model.to(device)
+
+    # Restaurar optimizer si corresponde
+    if optimizer is not None and "optimizer_state_dict" in checkpoint:
+        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+
+    return model, optimizer, checkpoint
+
+
+def continuar_entrenamiento(
+    model,
+    optimizer,
+    criterion,
+    train_loader,
+    val_loader,
+    device,
+    checkpoint_path="best_model.pt",
+    do_early_stopping=True,
+    patience=5,
+    epochs_adicionales=5,
+    log_fn=print_log,
+    log_every=1,
+):
+    """
+    Restaura el modelo y el optimizer desde un checkpoint y continúa el entrenamiento.
+
+    Args:
+        model (torch.nn.Module): Instancia del modelo con la misma arquitectura que el checkpoint.
+        optimizer (torch.optim.Optimizer): Optimizer a usar (se sobrescribe con el estado del checkpoint).
+        criterion, train_loader, val_loader, device: igual que en train.
+        checkpoint_path (str): Ruta del checkpoint a cargar.
+        do_early_stopping, patience, epochs_adicionales, log_fn, log_every:
+            mismos roles que en `train`, pero para las épocas adicionales.
+
+    Returns:
+        (epoch_train_errors, epoch_val_errors, checkpoint_inicial):
+            listas de pérdidas de este tramo de entrenamiento
+            y el checkpoint desde el que se reanudó.
+    """
+    # 1) Restaurar estado previo
+    model, optimizer, checkpoint = restaurar_modelo(
+        model,
+        optimizer=optimizer,
+        checkpoint_path=checkpoint_path,
+        device=device,
+    )
+
+    start_epoch = checkpoint.get("epoch", -1) + 1
+    best_val_loss_prev = checkpoint.get("val_loss", None)
+    print(
+        f"Reanudando desde epoch {start_epoch} "
+        f"(checkpoint guardado en epoch {checkpoint.get('epoch', 'desconocida')}, "
+        f"val_loss={best_val_loss_prev:.5f} )"
+    )
+
+    # 2) Continuar entrenamiento por `epochs_adicionales`
+    epoch_train_errors, epoch_val_errors = train(
+        model,
+        optimizer,
+        criterion,
+        train_loader,
+        val_loader,
+        device,
+        do_early_stopping=do_early_stopping,
+        patience=patience,
+        epochs=epochs_adicionales,        # solo las épocas nuevas
+        log_fn=log_fn,
+        log_every=log_every,
+        checkpoint_path=checkpoint_path,  # se sigue actualizando el mismo archivo
+        save_optimizer=True,
+    )
+
+    return epoch_train_errors, epoch_val_errors, checkpoint
+
+def postprocess_batch(preds: torch.Tensor, min_size: int = 50) -> torch.Tensor:
+    """
+    preds: tensor (B,1,H,W) binario (0/1)
+    return: tensor (B,1,H,W) postprocesado
+    """
+    if not isinstance(preds, torch.Tensor):
+        raise TypeError(f"postprocess_batch esperaba torch.Tensor, recibió {type(preds)}")
+
+    preds_np = preds.detach().cpu().numpy()  # (B,1,H,W)
+
+    clean_preds = []
+    for i in range(preds_np.shape[0]):
+        mask_i = preds_np[i, 0]                  # (H,W)
+        mask_clean = clean_mask_v2(mask_i, min_size=min_size)
+        clean_preds.append(mask_clean[None, ...])  # (1,H,W)
+
+    clean_preds = np.stack(clean_preds, axis=0).astype(np.float32)  # (B,1,H,W)
+    clean_preds = torch.from_numpy(clean_preds)                     # tensor (B,1,H,W)
+    return clean_preds
+
+
+def clean_mask_v2(mask, min_size=5000):
+    """
+    mask: numpy array binaria 0/1
+    """
+    # Convert to uint8
+    m = mask.astype(np.uint8)
+
+    # ===== 1) Morphological CLOSE (fill small gaps/holes in border)
+    #kernel_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,(15,15))
+    #m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, kernel_close)
+
+    # ===== 1) Apertura SUAVE (no fill holes, solo corta ramas finas) =====
+    kernel_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5,5))
+    m = cv2.morphologyEx(m, cv2.MORPH_OPEN, kernel_open)    
+
+    # ===== 2) Eliminar componentes pequeños =====
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(m)
+    if num_labels > 1:
+        cleaned = np.zeros_like(m, dtype=np.uint8)
+        for lab in range(1, num_labels):  # 0 es fondo
+            if stats[lab, cv2.CC_STAT_AREA] >= min_size:
+                cleaned[labels == lab] = 1
+        m = cleaned    
+
+    # ===== 2) Morphological OPEN (remove spurious noise)
+    #kernel_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,(7,7))
+    #m = cv2.morphologyEx(m, cv2.MORPH_OPEN, kernel_open)
+
+    # ===== 3) Keep LARGEST connected component
+    #num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(m)
+    #if num_labels > 1:
+    #    largest_idx = 1 + np.argmax(stats[1:, cv2.CC_STAT_AREA])
+    #    m = (labels == largest_idx).astype(np.uint8)
+
+    # ===== 4) Fill small holes
+    #m = remove_small_holes(m.astype(bool), area_threshold=4000).astype(np.uint8)
+
+    # ===== 5) Optional final erosion (smooth boundary if too large)
+    #kernel_erode = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,(3,3))
+    #m = cv2.erode(m, kernel_erode)
+
+    return m    
+
+def dice_on_val_with_postproc(model, val_loader, device, threshold=0.5, min_size=5000):
+    model.eval()
+    inter = 0.0
+    union = 0.0
+
+    with torch.no_grad():
+        for x, y in val_loader:
+            x = x.to(device)
+            y = y.to(device).float()
+            if y.ndim == 3:
+                y = y.unsqueeze(1)
+
+            logits = model(x)
+            if logits.shape[-2:] != y.shape[-2:]:
+                logits = F.interpolate(
+                    logits,
+                    size=y.shape[-2:],
+                    mode="bilinear",
+                    align_corners=False,
+                )
+
+            probs = torch.sigmoid(logits)
+            preds = (probs > threshold).float()
+
+            # convertir a numpy para postproceso por imagen
+            preds_np = preds.cpu().numpy()
+            y_np = y.cpu().numpy()
+
+            # aplicar postproceso por batch
+            clean_preds = []
+            for i in range(preds_np.shape[0]):
+                mask_i = preds_np[i, 0]  # (H,W)
+                mask_clean = clean_mask_v2(mask_i, min_size=min_size)
+                clean_preds.append(mask_clean[None, ...])  # (1,H,W)
+
+            clean_preds = np.stack(clean_preds, axis=0)   # (B,1,H,W)
+            clean_preds = torch.from_numpy(clean_preds).float().to(device)
+
+            inter += (clean_preds * y).sum().item()
+            union += (clean_preds.sum() + y.sum()).item()
+
+    dice = (2 * inter + 1e-7) / (union + 1e-7)
+    return dice
+
+def predict_and_build_submission_tta(
+    model,
+    device,
+    data_loader,
+    out_csv="submission_tta",
+    threshold=0.5,
+    target_class=1,   # usado solo si el modelo es multiclass
+    use_post_proc=False,
+    min_size=5000,
+    debug=False,
+    mean=None,
+    std=None
+):
+    """
+    Igual que predict_and_build_submission, pero con Test-Time Augmentation (TTA)
+    usando flip horizontal:
+
+    Para cada batch:
+      - logits_orig = model(x)
+      - logits_flip = model(x_flipped) y luego se des-flippean los logits
+      - logits_avg = (logits_orig + logits_flip_unflipped) / 2
+      - Se reescala a 800x800, se aplica sigmoid + threshold, y luego post-proc opcional.
+
+    Soporta:
+      - Modelos binarios: salida (B,1,H,W), usa sigmoid.
+      - Modelos multiclass: salida (B,C,H,W), usa softmax y se queda con target_class, luego sigmoid.
+    """
+
+    model.eval()
+
+    image_ids = []
+    encoded_pixels = []
+
+    debug_imgs = []
+    debug_masks = []
+    debug_names = []
+
+    with torch.no_grad():
+        for x, name in data_loader:
+            x = x.to(device)
+
+            # --------------------------
+            # 1) Forward original
+            # --------------------------
+            logits_orig = model(x)   # (B,1,H,W) o (B,C,H,W)
+
+            # --------------------------
+            # 2) Forward con flip horizontal
+            # --------------------------
+            x_flip = torch.flip(x, dims=[-1])          # flip en dimensión W
+            logits_flip = model(x_flip)               # (B,1,H,W) o (B,C,H,W)
+            logits_flip = torch.flip(logits_flip, dims=[-1])  # volver a orientación original
+
+            # --------------------------
+            # 3) Promedio de logits
+            # --------------------------
+            logits = 0.5 * (logits_orig + logits_flip)
+
+            # --------------------------
+            # 4) Resize a 800×800 
+            # --------------------------
+            H_orig, W_orig = logits.shape[-2], logits.shape[-1]
+            logits_big = F.interpolate(
+                logits, size=(800, 800), mode="bilinear", align_corners=False
+            )
+
+            # --------------------------
+            # 5) Probabilidades según binario / multiclass
+            # --------------------------
+            if logits_big.shape[1] == 1:
+                # Binario
+                probs = torch.sigmoid(logits_big)
+            else:
+                # Multiclass
+                probs_all = torch.softmax(logits_big, dim=1)
+                probs = probs_all[:, target_class:target_class+1, :, :]  # (B,1,H,W)
+
+            # --------------------------
+            # 6) Binarizar por threshold
+            # --------------------------
+            mask = (probs > threshold).float()  # (B,1,800,800)
+
+            # Escalar min_size a la nueva resolución
+            if use_post_proc:
+                scale_area = (800 * 800) / (H_orig * W_orig)
+                min_size_scaled = int(min_size * scale_area)
+            else:
+                min_size_scaled = min_size
+
+            # --------------------------
+            # 7) POST-PROCESADO OPCIONAL
+            # --------------------------
+            if use_post_proc:
+                mask = postprocess_batch(mask, min_size=min_size).to(device)
+
+            # --------------------------
+            # 8) Debug: guardar "post"
+            # --------------------------
+            if debug and use_post_proc and len(debug_imgs) < 10:
+                batch_size = mask.shape[0]
+                for i in range(batch_size):
+                    if len(debug_imgs) >= 10:
+                        break
+                    debug_imgs.append(x[i].detach().cpu())
+                    debug_masks.append(
+                        mask[i].squeeze().cpu().numpy().astype(np.uint8)
+                    )
+                    debug_names.append(name[i])   
+
+            # --------------------------
+            # 9) Codificar cada elemento del batch en RLE
+            # --------------------------
+            batch_size = mask.shape[0]
+            for i in range(batch_size):
+                mask_np = mask[i].squeeze().cpu().numpy().astype(np.uint8)
+                rle = rle_encode(mask_np)
+
+                image_ids.append(name[i])
+                encoded_pixels.append(rle)
+
+    # ==========================
+    # PLOT DEBUG (layout igual a visualizar_test)
+    # ==========================
+    if debug and use_post_proc and len(debug_imgs) > 0:
+
+        n = len(debug_imgs)
+        fig, axs = plt.subplots(2, n, figsize=(3*n, 6))
+
+        if n == 1:  # asegurar shape 2×1
+            axs = np.array(axs).reshape(2, 1)
+
+        for i in range(n):
+            # ---- Imagen ----
+            img_vis = denormalize(debug_imgs[i], mean, std).clamp(0,1)
+            img_vis = img_vis.permute(1,2,0)
+
+            axs[0, i].imshow(img_vis)
+            axs[0, i].set_title(f"{debug_names[i]}", fontsize=8)
+            axs[0, i].axis("off")
+
+            # ---- Máscara post-proc ----
+            axs[1, i].imshow(debug_masks[i], cmap="gray")
+            axs[1, i].set_title("pred (post)", fontsize=8)
+            axs[1, i].axis("off")
+
+        plt.tight_layout(pad=0.3)
+        plt.show()   
+
+    # --------------------------
+    # 11) SUBMISSION
+    # --------------------------
+    df = pd.DataFrame({"id": image_ids, "encoded_pixels": encoded_pixels})
+
+    ts = datetime.now().strftime("%d-%m-%Y_%H:%M")
+    csv_name = f"submissions/{out_csv}_{ts}.csv"
+    df.to_csv(csv_name, index=False)
+    print(f"submission TTA guardado como: {csv_name}")
+
+    return df, csv_name
+
+
+def mejores_params_val(model, loader, device):
+    thresholds = [0.3, 0.4, 0.45, 0.5, 0.55, 0.6]
+    min_sizes   = [1000, 2000, 3000, 5000]
+
+    best_dice   = -1.0
+    best_params = None
+
+    for th, ms in product(thresholds, min_sizes):
+        dice = dice_on_val_with_postproc(
+            model,
+            loader,
+            device,
+            threshold=th,
+            min_size=ms,
+        )
+        print(f"threshold={th:.2f}, min_size={ms}: Dice (val) = {dice:.5f}")
+
+        if dice > best_dice:
+            best_dice   = dice
+            best_params = (th, ms)
+
+    print("\nMejores parámetros en validación:")
+    print(f"  threshold = {best_params[0]:.2f}")
+    print(f"  min_size  = {best_params[1]}")
+    print(f"  Dice (val) = {best_dice:.5f}")
+
+    return best_params[0], best_params[1]
+
+def match_output_to_dim(output, dim=800):
+    if output.shape[-2:] != dim:
+        # Para LOGITS: bilinear.
+        output = F.interpolate(output, size=dim, mode="bilinear", align_corners=False)
+    return output
+
+def denormalize(img, mean, std):
+    """
+    img: tensor (C,H,W) normalizado
+    devuelve tensor (C,H,W) en [0,1] aprox
+    """
+    mean = torch.tensor(mean).view(-1, 1, 1)
+    std  = torch.tensor(std).view(-1, 1, 1)
+    return img * std + mean
+    
+@torch.no_grad()
+def visualizar_test(model, loader, device, mean_rgb, std_rgb, n=10, threshold=0.5):
+    model.eval()
+    imgs, names = next(iter(loader))      
+    imgs = imgs.to(device)
+
+    logits = model(imgs)
+    logits = match_output_to_dim(logits)  
+    probs  = torch.sigmoid(logits)
+    preds  = (probs > threshold).float()
+
+    B = imgs.size(0)
+    n = min(n, B)
+    fig, axs = plt.subplots(2, n, figsize=(3*n, 6))
+    
+    for i in range(n):
+        # Imagen
+        img_vis = denormalize(imgs[i].cpu(), mean_rgb, std_rgb).clamp(0,1).permute(1,2,0)
+        axs[0, i].imshow(img_vis)
+        axs[0, i].set_title(f"{names[i]}", fontsize=8)
+        axs[0, i].axis("off")
+
+        # Máscara
+        mask = preds[i].cpu().squeeze()
+        axs[1, i].imshow(mask, cmap="gray")
+        axs[1, i].set_title("pred", fontsize=8)
+        axs[1, i].axis("off")
+
+    plt.tight_layout(pad=0.3)
+    plt.show()
+
+@torch.no_grad()
+def dice_binaria(logits, target, threshold=0.5, eps=1e-7):
+    if logits.dim()==3: logits = logits.unsqueeze(1)
+    if target.dim()==3: target = target.unsqueeze(1)
+    probs = torch.sigmoid(logits)
+    preds = (probs >= threshold).float()
+    target = (target > 0).float()
+    inter = (preds * target).sum(dim=(1,2,3))
+    denom = preds.sum(dim=(1,2,3)) + target.sum(dim=(1,2,3))
+    dice = torch.where(denom>0, (2*inter+eps)/(denom+eps), torch.ones_like(denom))
+    return dice.mean()
+
+# NCLASSES = 1
+@torch.no_grad()
+def model_segmentation_report(model, dataloader, device, nclasses, do_confusion_matrix=True, show_dice_loss=True, threshold=0.5):
+
+    model.eval()
+    ys, ps = [], []
+    dice_vals = []
+
+    for x, y in dataloader:
+        x = x.to(device)
+        y = y.to(device)  # y: (N,H,W) long
+        logits = model(x)                         # (N,C,h,w)
+        logits = F.interpolate(logits, size=y.shape[-2:], mode='bilinear', align_corners=False)
+
+        # Alinear tamaños
+        #logits = match_output_dim(logits, y)
+
+        if show_dice_loss and nclasses == 1:
+            dice_vals.append(dice_binaria(logits, y).item())
+
+        if nclasses == 1:
+            probs = torch.sigmoid(logits)
+            pred = (probs >= threshold).long().squeeze(1)  # (N,h,w)          
+
+        # Aplanar por píxel
+        ys.append(y.detach().cpu().numpy().ravel())
+        ps.append(pred.detach().cpu().numpy().ravel())
+
+    y_true = np.concatenate(ys, axis=0)
+    y_pred = np.concatenate(ps, axis=0)
+
+    labels = [0,1] if nclasses == 1 else list(range(nclasses))
+    target_names = ['no-persona','persona'] if nclasses == 1 else [str(i) for i in labels]    
+
+    acc = accuracy_score(y_true, y_pred)
+    report = classification_report(
+        y_true, y_pred,
+        labels=labels,
+        target_names=target_names,
+        output_dict=True,
+        zero_division=0
+    )
+
+    if report.get("accuracy") is not None and not isinstance(report["accuracy"], dict):
+        report["accuracy"] = {"f1-score": report["accuracy"]}
+
+    if show_dice_loss and nclasses == 1:
+        mean_dice = float(np.mean(dice_vals)) if dice_vals else 0.0
+        # por clase positiva "1"
+        report.setdefault("1", {})["dice"] = mean_dice
+        # promedios
+        report.setdefault("macro avg", {})["dice"] = mean_dice
+        report.setdefault("weighted avg", {})["dice"] = mean_dice
+
+    print(f"Accuracy: {acc:.4f}")
+    print_metrics_report(report)
+
+    cm = None
+    if do_confusion_matrix:
+        cm = confusion_matrix(y_true, y_pred, labels=labels)
+        plot_confusion_matrix(cm, title="Confusion matrix")
+
+    return acc, report, cm

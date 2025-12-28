@@ -1,0 +1,10 @@
+[tool.ruff]
+# Longitud máxima de línea (por defecto es 88, puedes aumentarlo)
+line-length = 120
+
+[tool.ruff.format]
+# Configuración del formateador
+# Puedes desactivar el formateo automático de ciertos elementos si es necesario
+quote-style = "double"
+indent-style = "space"
+
